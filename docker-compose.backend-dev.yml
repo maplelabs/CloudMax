@@ -1,0 +1,227 @@
+services:
+  # Postgres for backend dev (exposed on 5433)
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: sre-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: otelu
+      POSTGRES_PASSWORD: otelp
+      POSTGRES_DB: postgres
+    ports:
+      - "127.0.0.1:5432:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    configs:
+      - source: postgres-init-sql
+        target: /docker-entrypoint-initdb.d/00-init.sql
+        mode: 0444
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U otelu -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    networks:
+      - sre-backend-dev-network
+
+  # Redis for Queue System (internal)
+  redis:
+    image: docker.io/redis:7
+    container_name: sre-redis
+    restart: always
+    command: >
+      redis-server /usr/local/etc/redis/redis.conf --requirepass ${REDIS_QUEUE_AUTH:-queueredissecret} --port 6379
+    configs:
+      - source: redis-config
+        target: /usr/local/etc/redis/redis.conf
+        mode: 444
+    ports:
+      - "127.0.0.1:6379:6379"
+    networks:
+      - sre-backend-dev-network
+    healthcheck:
+      test: [ "CMD", "redis-cli", "-p", "6379", "-a", "${REDIS_QUEUE_AUTH:-queueredissecret}", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  # Redis for Langfuse (internal)
+  redis-langfuse:
+    image: docker.io/redis:7
+    restart: always
+    command: >
+      redis-server /usr/local/etc/redis/redis.conf --requirepass ${REDIS_AUTH:-myredissecret} --port 6380
+    configs:
+      - source: redis-config
+        target: /usr/local/etc/redis/redis.conf
+        mode: 444
+    networks:
+      - sre-backend-dev-network
+
+  # ClickHouse for Langfuse (internal)
+  clickhouse:
+    image: docker.io/clickhouse/clickhouse-server
+    restart: always
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: clickhouse
+    tmpfs:
+      - /var/lib/clickhouse
+      - /var/log/clickhouse-server
+    networks:
+      - sre-backend-dev-network
+
+  # MinIO for Langfuse (internal)
+  minio:
+    image: docker.io/minio/minio
+    restart: always
+    entrypoint: sh
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: miniosecret
+    tmpfs:
+      - /data
+    networks:
+      - sre-backend-dev-network
+
+  # Langfuse worker (internal)
+  langfuse-worker:
+    image: docker.io/langfuse/langfuse-worker:3
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_started
+      minio:
+        condition: service_started
+      redis-langfuse:
+        condition: service_started
+      clickhouse:
+        condition: service_started
+    environment: &lf_worker_env
+      NEXTAUTH_URL: http://langfuse-web:3000
+      DATABASE_URL: postgresql://otelu:otelp@postgres:5432/langfuse
+      SALT: dev_salt_value
+      ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+      TELEMETRY_ENABLED: "true"
+      LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "true"
+      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: clickhouse
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: miniosecret
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      REDIS_HOST: redis-langfuse
+      REDIS_PORT: "6380"
+      REDIS_AUTH: ${REDIS_AUTH:-myredissecret}
+      REDIS_TLS_ENABLED: "false"
+    networks:
+      - sre-backend-dev-network
+
+
+  # Langfuse web (exposed for browser at 3000)
+  langfuse-web:
+    image: docker.io/langfuse/langfuse:3
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_started
+      minio:
+        condition: service_started
+      redis-langfuse:
+        condition: service_started
+      clickhouse:
+        condition: service_started
+    ports:
+      - "3000:3000"
+    environment:
+      <<: *lf_worker_env
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: dev_nextauth_secret
+      LANGFUSE_INIT_ORG_ID: sre
+      LANGFUSE_INIT_ORG_NAME: SRE
+      LANGFUSE_INIT_PROJECT_ID: cloud-sre-ops
+      LANGFUSE_INIT_PROJECT_NAME: Cloud SRE Ops
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: lf_public_dev_cloud_sre_ops
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: lf_secret_dev_cloud_sre_ops
+      LANGFUSE_INIT_USER_EMAIL: admin@example.com
+      LANGFUSE_INIT_USER_NAME: Admin
+      LANGFUSE_INIT_USER_PASSWORD: changeme
+    networks:
+      - sre-backend-dev-network
+
+  # Frontend (exposed on 8080)
+  # ==========================================================================
+  # Frontend Service - Development Mode (Backend runs on host)
+  # ==========================================================================
+  frontend:
+    build:
+      context: ./core/frontend
+      dockerfile: Dockerfile
+      args:
+        # Self-signed certificate configuration
+        CERT_DOMAINS: "cloudmax.xoriant.com,localhost"
+        CERT_IP_ADDRESSES: "127.0.0.1"
+    image: cloud-sre-ops-ai-frontend
+    container_name: sre-frontend
+    ports:
+      - "8443:443"      # HTTPS (primary)
+      - "8080:80"       # HTTP (redirects to HTTPS)
+    extra_hosts:
+      # Allow container to reach backend running on host machine
+      - "host.docker.internal:host-gateway"
+    environment:
+      # Connect to backend running on host at port 8000
+      BACKEND_URL: http://host.docker.internal:8000
+    networks:
+      - sre-backend-dev-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-k", "https://127.0.0.1:443/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  sre-backend-dev-network:
+    driver: bridge
+
+configs:
+  postgres-init-sql:
+    content: |
+      -- Initialize databases for backend and Langfuse (backend dev)
+      CREATE DATABASE checkpoint;
+      CREATE DATABASE langfuse;
+      CREATE DATABASE sreops;
+
+      -- Connect to sreops database and setup pgvector
+      \c sreops;
+
+      -- ----------------------------------------
+      -- 1) Install pgvector extension (superuser required)
+      -- ----------------------------------------
+      CREATE EXTENSION IF NOT EXISTS vector;
+
+  redis-config:
+    content: |
+      # Redis Configuration for RDB + AOF Persistence
+      # RDB Persistence (Snapshots)
+      save 900 1
+      save 300 10
+      save 60 10000
+      rdbcompression yes
+      rdbchecksum yes
+
+      # AOF Persistence (Append Only File)
+      appendonly yes
+      appendfsync everysec
+      auto-aof-rewrite-percentage 100
+      auto-aof-rewrite-min-size 64mb

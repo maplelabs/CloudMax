@@ -1,0 +1,9 @@
+const DollerSignIcon = (): JSX.Element => (
+<svg width="15" height="15" viewBox="0 0 15 15" fill="none" xmlns="http://www.w3.org/2000/svg">
+<path d="M7.32324 1.21973V13.4251" stroke="#64748B" strokeWidth="1.22054" strokeLinecap="round" strokeLinejoin="round"/>
+<path d="M10.3746 3.05176H5.79757C5.23108 3.05176 4.68779 3.27679 4.28723 3.67736C3.88666 4.07793 3.66162 4.62122 3.66162 5.1877C3.66162 5.75419 3.88666 6.29748 4.28723 6.69804C4.68779 7.09861 5.23108 7.32365 5.79757 7.32365H8.84892C9.41541 7.32365 9.95869 7.54869 10.3593 7.94925C10.7598 8.34982 10.9849 8.89311 10.9849 9.45959C10.9849 10.0261 10.7598 10.5694 10.3593 10.9699C9.95869 11.3705 9.41541 11.5955 8.84892 11.5955H3.66162" stroke="#64748B" strokeWidth="1.22054" strokeLinecap="round" strokeLinejoin="round"/>
+</svg>
+
+
+);
+export default DollerSignIcon;

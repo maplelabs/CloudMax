@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  code-triage-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: code-triage-agent
+    ports:
+      - "8000:8000"
+    environment:
+      - BEDROCK_API_KEY=${BEDROCK_API_KEY}
+      - AWS_REGION=${AWS_REGION}
+      - BEDROCK_MODEL_ID=${BEDROCK_MODEL_ID}
+      - BEDROCK_MAX_TOKENS=${BEDROCK_MAX_TOKENS:-4096}
+      - BEDROCK_TEMPERATURE=${BEDROCK_TEMPERATURE:-0.1}
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - GITHUB_MCP_URL=${GITHUB_MCP_URL:-https://api.githubcopilot.com/mcp/x/repos/readonly}
+      - ORCHESTRATOR_PORT=8000
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    # Run the A2A FastAPI application via uvicorn. The app is defined in
+    # src/a2a_app.py as `app` and exposes the standard A2A JSON-RPC interface
+    # on /a2a/tasks.
+    command: uvicorn src.a2a_app:app --host 0.0.0.0 --port 8000
+    restart: unless-stopped
+

@@ -1,0 +1,24 @@
+{
+  "name": "ai-sre-ops",
+  "version": "1.0.0",
+  "description": "AI-powered Site Reliability Engineering Alert Dashboard with React frontend and FastAPI backend.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "prepare": "husky"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/maplelabs/ai-sre-ops.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "Apache-2.0",
+  "bugs": {
+    "url": "https://github.com/maplelabs/ai-sre-ops/issues"
+  },
+  "homepage": "https://github.com/maplelabs/ai-sre-ops#readme",
+  "devDependencies": {
+    "husky": "^9.1.7"
+  }
+}

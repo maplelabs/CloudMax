@@ -1,72 +1,103 @@
 # AI-SRE-Ops
 
-AI-powered Site Reliability Engineering Alert Dashboard with automated triage using AWS Bedrock Claude.
+AI-powered Site Reliability Engineering Alert Dashboard with automated, configurable LLM-backed triage.
 
-> **🚀 Quick Start: See [diagnostic-mcp-server/README.md](./diagnostic-mcp-server/README.md)** - Complete guide to setup, run, and use the system
+> **Quick start:** This README covers starting the full application. See [diagnostic MCP server docs](./diagnostics/mcp-server/README.md) for MCP-specific setup and troubleshooting.
 
 ## Prerequisites
 
-- Docker & Docker Compose
-- Node.js 18+ (for frontend development)
-- Python 3.12+ (for backend development)
-- AWS Account with Bedrock access
+For the Docker-based full stack:
 
-## Development Environment Setup (one-time)
+- Docker Engine with Docker Compose v2 (`docker compose`)
+- GNU Make
+- Internet access to build images and download dependencies; the ports published by the selected Compose workflow must be available
 
-```bash
-# Backend
-cp backend/.env.example backend/.env
-```
+You do not need Node.js or Python to run the full stack in containers. For local development, use Node.js 18+ for the frontend and Python 3.12+ for the backend. Model-backed features also require credentials for the provider you configure.
 
-Notes:
+## Quick start: full application
 
-- Defaults are set for local development. Docker compose files override environment variables as needed.
-
-## Development Workflows
-
-Three docker-compose files support different development scenarios:
-
-- **docker-compose.yml** - Complete stack with all services
-- **docker-compose.frontend-dev.yml** - Backend containerized, frontend can be run locally with Vite
-- **docker-compose.backend-dev.yml** - Frontend containerized, backend can be run locally for debugging
-
-Use `up/down/status` for relevant operations:
+Run these commands from the repository root. On first use, create local configuration files from the examples:
 
 ```bash
-# Full stack (mTLS disabled - default for development)
-make full-stack up/down/status
-
-# Full stack with mTLS enabled (for production-like testing)
-make full-stack-mtls up/down/status
-
-# Frontend development
-make frontend-development-stack up/down/status
-
-# Backend development
-make backend-development-stack up/down/status
-
-# Show all commands
-make help
+cp core/backend/.env.example core/backend/.env
+cp agents/code-triage/.env.example agents/code-triage/.env
 ```
 
-### MCP Server mTLS Modes
+Edit the local files for the integrations you intend to use. Keep populated `.env` files private and do not commit them. Both files are required by the full-stack Compose setup; the Makefile checks for them before starting.
 
-The MCP (Model Context Protocol) server supports two deployment modes:
+Start the application:
 
-- **Development Mode (mTLS disabled)** - Use `make full-stack up`
-  - No client certificates required
-  - Easier for local development and testing
-  - Default mode
+```bash
+make full-stack up
+```
 
-- **Production Mode (mTLS enabled)** - Use `make full-stack-mtls up`
-  - Client certificates required for all connections
-  - Enhanced security for production-like environments
-  - Requires certificate configuration via UI
+The first start builds the application images and starts the services. Then open:
 
-**📖 For complete setup and deployment instructions, see [diagnostic-mcp-server/README.md](./diagnostic-mcp-server/README.md)**
+- Frontend: <https://localhost:3101> (the local HTTPS certificate may trigger a browser warning)
+- Backend API: <http://localhost:8080>
+- Langfuse: <http://localhost:3000>
 
-Additional resources:
-- [diagnostic-mcp-server/ARCHITECTURE.md](./diagnostic-mcp-server/ARCHITECTURE.md) - Architecture details
+Check status or stop the stack with separate commands, also from the repository root:
+
+```bash
+make full-stack status
+make full-stack down
+```
+
+`down` preserves named data volumes. Database migrations run automatically when the stack starts; see [Database Migrations](#database-migrations) for manual commands.
+
+## Local development workflows
+
+The two development stacks run supporting services in Docker while you run one application component locally. Start and stop each stack from the repository root.
+
+### Develop the frontend locally
+
+```bash
+# Terminal 1, from the repository root
+make frontend-development-stack up
+
+# Terminal 2
+cd core/frontend
+npm ci
+npm run dev
+```
+
+Open the Vite frontend at <http://localhost:3000>. The backend API is at <http://localhost:8000>, and Langfuse is at <http://localhost:3001> in this workflow. Stop the Docker services with `make frontend-development-stack down` from the repository root.
+
+### Develop the backend locally
+
+First start the supporting services:
+
+```bash
+make backend-development-stack up
+```
+
+From the repository root, start a second terminal. Create and activate a virtual environment, install the backend requirements, and start the API:
+
+```bash
+cd core/backend
+python -m venv .venv
+# macOS/Linux: source .venv/bin/activate
+# Windows PowerShell: .\.venv\Scripts\Activate.ps1
+python -m pip install -r py_requirements.txt
+uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+The backend API is at <http://localhost:8000>; the containerized frontend is at <https://localhost:8443> (with a local-certificate warning). Stop supporting services with `make backend-development-stack down` from the repository root.
+
+Run `make help` for the available Make targets and commands.
+
+### MCP mTLS testing
+
+The default `make full-stack up` workflow runs locally with mTLS disabled. To test the mTLS-enabled configuration, use:
+
+```bash
+make full-stack-mtls up
+```
+
+This mode requires valid client certificates to be configured. It is a local integration-test option, not production deployment guidance. Stop it with `make full-stack-mtls down`.
+
+For MCP-specific configuration and troubleshooting, see [the diagnostic MCP server guide](./diagnostics/mcp-server/README.md). The [system architecture overview](./diagnostics/mcp-server/README.md#system-architecture) is also available there. Booking-specific diagnostics are documented separately under [demos/booking-demo](./demos/booking-demo/README.md).
 
 ## Database Migrations
 
@@ -98,65 +129,21 @@ make migrate-revision MESSAGE="Add custom index"
 - Always review generated migrations before applying them
 - Use descriptive messages for better tracking
 
-## Docker Image Builds
+## Optional Container Image Publishing
+
+The Docker Compose workflows above do not require publishing images to a registry. For a separate registry build, the Makefile uses Docker Buildx to build and push the backend and frontend images. Authenticate to the target registry first, and supply an explicit version because no deployment overlay provides a default tag.
 
 ```bash
-# Build and push ARM images for integration
-make docker-build-push ENV=integration
+# Build and push for the current machine's platform
+make docker-build-push VERSION=v1.54.1
 
-# Build and push ARM images for production (main branch only)
-make docker-build-push ENV=production
+# Build and push AMD64 + ARM64 images
+make docker-build-multiplatform VERSION=v1.54.1
 ```
 
-## Kubernetes Deployment
+The image repositories are configured by `REGISTRY` and `IMAGE_NAMESPACE` in the Makefile. Override `REGISTRY` for your target registry as needed. These targets only publish images; they do not deploy or update the Docker Compose stack.
 
-### Setup Secrets
-
-```bash
-cp charts/ai-sre-app/.env.example charts/ai-sre-app/.env
-# Set the OpenAI and Bedrock secrets in charts/ai-sre-app/.env
-```
-
-### Deploy
-
-```bash
-# Deploy to integration environment
-make helm-deploy ENV=integration
-
-# Deploy to production environment
-make helm-deploy ENV=production
-```
-
-### Uninstall
-
-```bash
-# Uninstall from integration environment
-make helm-uninstall ENV=integration
-
-# Uninstall from production environment
-make helm-uninstall ENV=production
-```
-
-## Configuration
-
-### Version Management
-
-Each component has its own version file:
-
-- `frontend/version.txt` - Frontend version
-- `backend/version.txt` - Backend version
-
-Update these files to change image tags for builds.
-
-### Registry Configuration
-
-Update the `REGISTRY` variable in the Makefile to point to your container registry:
-
-```makefile
-REGISTRY := your-registry.com
-```
-
-### Grafana Webhook Setup
+## Grafana Webhook Setup
 
 To forward alerts from Grafana to the Alert Dashboard, configure a webhook in the Grafana UI.
 
@@ -178,86 +165,3 @@ To forward alerts from Grafana to the Alert Dashboard, configure a webhook in th
 - Click **Save policy**.  
 
 Grafana alerts matching the policy will now be sent to the Alert Dashboard.
-
-## Image Building Options
-### Standard Build Commands
-
-```bash
-# Single-platform build (auto-detects your machine architecture, defaults to ARM64)
-make docker-build-push ENV=integration
-
-# Multiplatform build (AMD64 + ARM64)
-make docker-build-multiplatform ENV=integration
-
-# With optional suffix for custom tags
-make docker-build-push ENV=dev SUFFIX=hotfix
-make docker-build-multiplatform ENV=integration SUFFIX=rc1
-```
-
-### Platform Detection
-
-The Makefile automatically detects your machine architecture:
-- **Intel/AMD machines**: Builds for `linux/amd64`
-- **ARM machines**: Builds for `linux/arm64`
-- **Unknown architectures**: Defaults to `linux/arm64`
-
-### Tag Generation
-
-Images are tagged using the pattern: `{env-prefix}-v{version}[-suffix]`
-
-Examples:
-- `integration` → `int-v2.0.0`
-- `production` → `prod-v2.0.0`
-- `dev SUFFIX=hotfix` → `dev-v2.0.0-hotfix`
-- `dev SUFFIX=arm64` → `dev-v2.0.0-arm64`
-- `integration SUFFIX=amd64` → `int-v2.0.0-amd64`
-
-### Architecture-Specific Building with SUFFIX
-
-You can use the SUFFIX parameter to create architecture-specific tags, which is useful for distributed building or manual multiplatform manifest creation:
-
-#### **Building for Specific Architectures:**
-
-```bash
-# Build ARM64 images (on ARM machine or forced)
-make docker-build-push ENV=integration SUFFIX=arm64
-# Results: int-v2.0.0-arm64
-
-# Build AMD64 images (on Intel/AMD machine or forced)
-make docker-build-push ENV=integration SUFFIX=amd64
-# Results: int-v2.0.0-amd64
-```
-
-#### **Distributed Building: Manual Multiplatform Image Build**
-
-1. **On AMD64 machine:**
-   ```bash
-   make docker-build-push ENV=integration SUFFIX=amd64
-   ```
-
-2. **On ARM64 machine:**
-   ```bash
-   make docker-build-push ENV=integration SUFFIX=arm64
-   ```
-
-3. **Create multiplatform manifest (on either machine):**
-   ```bash
-   TAG_BASE=int-v2.0.1
-
-   # Backend manifest
-   docker manifest create \
-     thouqueerahmedml/cloud-sre-ops-ai-backend:$TAG_BASE \
-     --amend thouqueerahmedml/cloud-sre-ops-ai-backend:$TAG_BASE-amd64 \
-     --amend thouqueerahmedml/cloud-sre-ops-ai-backend:$TAG_BASE-arm64
-
-   docker manifest push thouqueerahmedml/cloud-sre-ops-ai-backend:$TAG_BASE
-
-   # Frontend manifest
-   docker manifest create \
-     thouqueerahmedml/cloud-sre-ops-ai-frontend:$TAG_BASE \
-     --amend thouqueerahmedml/cloud-sre-ops-ai-frontend:$TAG_BASE-amd64 \
-     --amend thouqueerahmedml/cloud-sre-ops-ai-frontend:$TAG_BASE-arm64
-
-   docker manifest push thouqueerahmedml/cloud-sre-ops-ai-frontend:$TAG_BASE
-   ```
-

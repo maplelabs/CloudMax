@@ -1,0 +1,131 @@
+version: '3.8'
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    networks:
+      - kafka-network
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    networks:
+      - kafka-network
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  opa:
+    image: openpolicyagent/opa:0.70.0
+    container_name: opa
+    command:
+      - "run"
+      - "--server"
+      - "--addr=0.0.0.0:8181"
+      - "--log-level=info"
+      - "/policies/authz.rego"
+    ports:
+      - "8181:8181"
+    volumes:
+      - ./policies:/policies:ro
+    networks:
+      - kafka-network
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8181/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mcp-server
+    depends_on:
+      kafka:
+        condition: service_healthy
+      opa:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      - OPA_URL=http://opa:8181
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - SKIP_KAFKA_CHECK=true
+    networks:
+      - kafka-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s = socket.socket(); s.connect(('localhost', 8000)); s.close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+  # Nginx HTTP Proxy (no mTLS)
+  nginx-http:
+    image: nginx:1.25-alpine
+    container_name: nginx-http-proxy
+    depends_on:
+      mcp-server:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./nginx/http.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - kafka-network
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - http
+      - all
+
+  # Nginx HTTPS Proxy (with mTLS)
+  nginx-https:
+    image: nginx:1.25-alpine
+    container_name: nginx-https-proxy
+    depends_on:
+      mcp-server:
+        condition: service_healthy
+    ports:
+      - "8443:8443"
+    volumes:
+      - ./nginx/https-mtls.conf:/etc/nginx/nginx.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+    networks:
+      - kafka-network
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--no-check-certificate", "-q", "https://localhost:8443/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - https
+      - mtls
+      - all
+
+networks:
+  kafka-network:
+    driver: bridge
+

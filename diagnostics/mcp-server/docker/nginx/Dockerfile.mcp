@@ -1,0 +1,15 @@
+FROM nginx:1.25-alpine
+
+# Copy entrypoint script
+COPY docker/nginx/docker-entrypoint-mcp.sh /docker-entrypoint-mcp.sh
+RUN chmod +x /docker-entrypoint-mcp.sh
+
+# Create log directory
+RUN mkdir -p /var/log/nginx
+
+# Expose HTTPS port
+EXPOSE 8443
+
+ENTRYPOINT ["/docker-entrypoint-mcp.sh"]
+CMD ["nginx", "-g", "daemon off;"]
+

@@ -1,0 +1,542 @@
+x-shared-variables: &shared-variables
+  # Use database config by default (set to "false" to use .env file instead)
+  CONFIG_DB: "true"
+
+  # redis server details for rq
+  REDIS_QUEUE_HOST: redis
+  REDIS_QUEUE_PORT: "6379"
+  REDIS_QUEUE_AUTH: ${REDIS_QUEUE_AUTH:-queueredissecret}
+  REDIS_QUEUE_DB: "1"
+
+  # postgres checkpointer for langgraph
+  POSTGRES_CHECKPOINTER_CONN_STRING: postgresql://otelu:otelp@postgres:5432/checkpoint?sslmode=disable
+
+  # postgres db url
+  DATABASE_URL: postgresql+asyncpg://otelu:otelp@postgres:5432/sreops
+
+  # langfuse related settings
+  LANGFUSE_TRACING: true
+  LANGFUSE_HOST: http://langfuse-web:3000
+  LANGFUSE_PUBLIC_KEY: lf_public_dev_cloud_sre_ops
+  LANGFUSE_SECRET_KEY: lf_secret_dev_cloud_sre_ops
+
+  # langsmith related setting
+  LANGSMITH_TRACING: false
+  LANGSMITH_API_KEY: test
+
+  #for chaos_workflow.py
+  CHAOS_MAX_WORKFLOW_TIME_MINUTES: 30
+  MCP_MTLS_ENABLED: ${MCP_MTLS_ENABLED:-false}
+
+  # Code Triage Agent Configuration (for testing without frontend)
+  # NOTE: CODE_TRIAGE_* values are now managed via core/backend/.env for backend,
+  # triager, and evaluator services.
+
+services:
+  # Database Migration service
+  migrate:
+    build:
+      context: ./core/backend
+      dockerfile: Dockerfile
+    image: cloud-sre-ops-ai-backend
+    container_name: sre-migrate
+    # env_file: (only needed when CONFIG_DB=false to use environment variables instead of database config)
+    env_file:
+      - ./core/backend/.env
+    environment:
+      MODE: migrate
+      <<: *shared-variables
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - sre-network
+    restart: "no"  # Run once and exit
+
+  # Backend FastAPI service
+  backend:
+    build:
+      context: ./core/backend
+      dockerfile: Dockerfile
+    image: cloud-sre-ops-ai-backend
+    container_name: sre-backend
+    ports:
+      - "8080:8000"
+    # env_file: (only needed when CONFIG_DB=false to use environment variables instead of database config)
+    env_file:
+      - ./core/backend/.env
+    environment:
+      <<: *shared-variables
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      # Note: code-triage-agent is optional and only required if CODE_TRIAGE_ENABLED=true
+      # Removed dependency to allow backend to start even if code-triage-agent fails
+    networks:
+      - sre-network
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Async Triager service
+  triager:
+    build:
+      context: ./core/backend
+      dockerfile: Dockerfile
+    image: cloud-sre-ops-ai-backend
+    container_name: sre-triager
+    # env_file: (only needed when CONFIG_DB=false to use environment variables instead of database config)
+    env_file:
+      - ./core/backend/.env
+    environment:
+      <<: *shared-variables
+      MODE: triager
+      # CONFIG_DB: "false" (uncomment only if you want to use .env file instead of database config)
+      ENABLE_TOKEN_RATE_LIMITING: "false"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - sre-network
+    restart: unless-stopped
+    # Add stop signal and grace period for graceful shutdown
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
+
+  # Async Evaluator service
+  evaluator:
+    build:
+      context: ./core/backend
+      dockerfile: Dockerfile
+    image: cloud-sre-ops-ai-backend
+    container_name: sre-evaluator
+    # env_file: (only needed when CONFIG_DB=false to use environment variables instead of database config)
+    env_file:
+      - ./core/backend/.env
+    environment:
+      <<: *shared-variables
+      MODE: evaluator
+      # CONFIG_DB: "false" (uncomment only if you want to use .env file instead of database config)
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - sre-network
+    restart: unless-stopped
+    # Add stop signal and grace period for graceful shutdown
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
+
+  # Async Alert Grouper service
+  grouper:
+    build:
+      context: ./core/backend
+      dockerfile: Dockerfile
+    image: cloud-sre-ops-ai-backend
+    container_name: sre-grouper
+    environment:
+      <<: *shared-variables
+      MODE: grouper
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - sre-network
+    restart: unless-stopped
+    # Add stop signal and grace period for graceful shutdown
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
+
+   # RQ Job Scheduler service
+  job-scheduler:
+    build:
+      context: ./core/backend
+      dockerfile: Dockerfile
+    image: cloud-sre-ops-ai-backend
+    container_name: sre-job-scheduler
+    # env_file: (only needed when CONFIG_DB=false to use environment variables instead of database config)
+    env_file:
+      - ./core/backend/.env
+    environment:
+      <<: *shared-variables
+      MODE: job-scheduler
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - sre-network
+    restart: unless-stopped
+    # Add stop signal and grace period for graceful shutdown
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
+
+  # Frontend - React UI with built-in nginx
+  # ==========================================================================
+  # Frontend Service - React SPA with Nginx
+  # ==========================================================================
+  frontend:
+    build:
+      context: ./core/frontend
+      dockerfile: Dockerfile
+      args:
+        BACKEND_URL: http://backend:8000
+        # Self-signed certificate configuration
+        CERT_DOMAINS: "cloudmax.xoriant.com,localhost"
+        CERT_IP_ADDRESSES: "127.0.0.1"
+    image: cloud-sre-ops-ai-frontend
+    container_name: sre-frontend
+    ports:
+      - "3101:443"      # HTTPS (primary)
+      - "3100:80"       # HTTP (redirects to HTTPS)
+    environment:
+      - BACKEND_URL=http://backend:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - sre-network
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "-k", "https://127.0.0.1:443/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # MCP Nginx - Proxy for diagnostic MCP server
+  mcp-nginx:
+    build:
+      context: ./diagnostics/mcp-server
+      dockerfile: docker/nginx/Dockerfile.mcp
+      args:
+        MTLS_ENABLED: ${MCP_MTLS_ENABLED:-false}
+    image: cloud-sre-ops-ai-mcp-nginx
+    container_name: mcp-nginx
+    ports:
+      - "8443:8443"
+    volumes:
+      - ./diagnostics/mcp-server/certs:/etc/nginx/certs:ro
+    environment:
+      - MTLS_ENABLED=${MCP_MTLS_ENABLED:-false}
+    depends_on:
+      mcp-server:
+        condition: service_healthy
+      opa:
+        condition: service_started
+    networks:
+      - sre-network
+    healthcheck:
+      test: [ "CMD", "sh", "-c", "if [ \"$$MTLS_ENABLED\" = \"true\" ]; then curl -f -k https://127.0.0.1:8443/health; else curl -f http://127.0.0.1:8443/health; fi" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ========================================
+  # Diagnostic MCP Server Services
+  # ========================================
+
+  # OPA (Open Policy Agent) for authorization
+  opa:
+    image: openpolicyagent/opa:0.70.0
+    container_name: sre-opa
+    command:
+      - "run"
+      - "--server"
+      - "--addr=0.0.0.0:8181"
+      - "--log-level=info"
+      - "/policies/authz.rego"
+    ports:
+      - "8181:8181"
+    volumes:
+      - ./diagnostics/mcp-server/policies:/policies:ro
+    environment:
+      - MTLS_ENABLED=${MCP_MTLS_ENABLED:-false}
+    networks:
+      - sre-network
+
+  # MCP Server for diagnostic tools
+  mcp-server:
+    build:
+      context: ./diagnostics/mcp-server
+      dockerfile: Dockerfile
+    image: diagnostic-mcp-server
+    container_name: sre-mcp-server
+    depends_on:
+      opa:
+        condition: service_started
+    ports:
+      - "8000:8000"
+    environment:
+      - OPA_URL=http://opa:8181
+      - SKIP_KAFKA_CHECK=true
+      - MTLS_ENABLED=${MCP_MTLS_ENABLED:-false}
+      # Kafka Configuration
+      - KAFKA_BOOTSTRAP_SERVERS=hotel-reservation-application-kafka-1:9092
+      # PostgreSQL Configuration
+      - POSTGRES_HOST=hotel_postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DATABASE=hotel_booking_db
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+    networks:
+      - sre-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s = socket.socket(); s.connect(('localhost', 8000)); s.close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+  # Code Triage Agent for code analysis
+  code-triage-agent:
+    build:
+      context: ./agents/code-triage
+      dockerfile: Dockerfile
+    image: code-triage-agent
+    container_name: code-triage-agent
+    ports:
+      - "8002:8002"
+    env_file:
+      - ./agents/code-triage/.env
+    networks:
+      - sre-network
+    command: uvicorn src.a2a_app:app --host 0.0.0.0 --port 8002
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ========================================
+  # Backend Services
+  # ========================================
+
+  # Shared Postgres for backend and Langfuse (internal only)
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: sre-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: otelu
+      POSTGRES_PASSWORD: otelp
+      POSTGRES_DB: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    configs:
+      - source: postgres-init-sql
+        target: /docker-entrypoint-initdb.d/00-init.sql
+        mode: 444
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U otelu -d postgres" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    networks:
+      - sre-network
+  
+  # Redis for Queue System (internal)
+  redis:
+    image: docker.io/redis:7
+    container_name: sre-redis
+    restart: always
+    command: >
+      redis-server /usr/local/etc/redis/redis.conf --requirepass ${REDIS_QUEUE_AUTH:-queueredissecret} --port 6379
+    volumes:
+      - redis_data:/data
+    configs:
+      - source: redis-config
+        target: /usr/local/etc/redis/redis.conf
+        mode: 444
+    ports:
+      - "127.0.0.1:6379:6379"
+    networks:
+      - sre-network
+    healthcheck:
+      test: [ "CMD", "redis-cli", "-p", "6379", "-a", "${REDIS_QUEUE_AUTH:-queueredissecret}", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  # Redis for Langfuse (internal)
+  redis-langfuse:
+    image: docker.io/redis:7
+    restart: always
+    command: >
+      redis-server /usr/local/etc/redis/redis.conf --requirepass ${REDIS_AUTH:-myredissecret} --port 6380
+    volumes:
+      - redis_langfuse_data:/data
+    configs:
+      - source: redis-config
+        target: /usr/local/etc/redis/redis.conf
+        mode: 444
+    networks:
+      - sre-network
+
+  # ClickHouse for Langfuse (internal)
+  clickhouse:
+    image: docker.io/clickhouse/clickhouse-server
+    restart: always
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: clickhouse
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - clickhouse_logs:/var/log/clickhouse-server
+    networks:
+      - sre-network
+
+  # MinIO for Langfuse (internal)
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    restart: always
+    entrypoint: sh
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: miniosecret
+    volumes:
+      - minio_data:/data
+    networks:
+      - sre-network
+
+  # Langfuse worker (internal)
+  langfuse-worker:
+    image: docker.io/langfuse/langfuse-worker:3
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_started
+      minio:
+        condition: service_started
+      redis-langfuse:
+        condition: service_started
+      clickhouse:
+        condition: service_started
+    environment: &lf_worker_env
+      NEXTAUTH_URL: http://langfuse-web:3000
+      DATABASE_URL: postgresql://otelu:otelp@postgres:5432/langfuse?sslmode=disable
+      SALT: dev_salt_value
+      ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+      TELEMETRY_ENABLED: "true"
+      LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "true"
+      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: clickhouse
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: miniosecret
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      REDIS_HOST: redis-langfuse
+      REDIS_PORT: "6380"
+      REDIS_AUTH: ${REDIS_AUTH:-myredissecret}
+      REDIS_TLS_ENABLED: "false"
+    networks:
+      - sre-network
+
+  # Langfuse web (exposed)
+  langfuse-web:
+    image: docker.io/langfuse/langfuse:3
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_started
+      minio:
+        condition: service_started
+      redis-langfuse:
+        condition: service_started
+      clickhouse:
+        condition: service_started
+    ports:
+      - "3000:3000"
+    environment:
+      <<: *lf_worker_env
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: dev_nextauth_secret
+      LANGFUSE_INIT_ORG_ID: sre
+      LANGFUSE_INIT_ORG_NAME: SRE
+      LANGFUSE_INIT_PROJECT_ID: cloud-sre-ops
+      LANGFUSE_INIT_PROJECT_NAME: Cloud SRE Ops
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: lf_public_dev_cloud_sre_ops
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: lf_secret_dev_cloud_sre_ops
+      LANGFUSE_INIT_USER_EMAIL: admin@example.com
+      LANGFUSE_INIT_USER_NAME: Admin
+      LANGFUSE_INIT_USER_PASSWORD: changeme
+    networks:
+      - sre-network
+
+networks:
+  sre-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  redis_langfuse_data:
+    driver: local
+  clickhouse_data:
+    driver: local
+  clickhouse_logs:
+    driver: local
+  minio_data:
+    driver: local
+
+configs:
+  postgres-init-sql:
+    content: |
+      -- Initialize databases for backend and Langfuse
+      CREATE DATABASE checkpoint;
+      CREATE DATABASE langfuse;
+      CREATE DATABASE sreops;
+
+      -- Connect to sreops database and setup pgvector
+      \c sreops;
+      CREATE EXTENSION IF NOT EXISTS vector;
+
+
+  redis-config:
+    content: |
+      # Redis Configuration for RDB + AOF Persistence
+      # RDB Persistence (Snapshots)
+      save 900 1
+      save 300 10
+      save 60 10000
+      rdbcompression yes
+      rdbchecksum yes
+
+      # AOF Persistence (Append Only File)
+      appendonly yes
+      appendfsync everysec
+      auto-aof-rewrite-percentage 100
+      auto-aof-rewrite-min-size 64mb
