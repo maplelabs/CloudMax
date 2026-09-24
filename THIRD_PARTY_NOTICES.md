@@ -61,7 +61,3 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
-
-## ScanCode reference clarification (not a third-party notice)
-
-ScanCode flagged `diagnostics/mcp-server/README.md` line 612 (`See LICENSE file for details.`) as `unknown-license-reference`. This is a generic license-file reference, not an identification of third-party software. The only license file found in the repository is the root `LICENSE` (Apache-2.0); no separate license file was found beside that README. Confirm that the root license applies to `diagnostics/mcp-server` and make the README reference explicit, or provide a directory-specific license if needed.

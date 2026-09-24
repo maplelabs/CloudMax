@@ -608,5 +608,9 @@ For more details, see:
 ---
 
 
+## License
+
+This MCP server is part of the project licensed under the [Apache License 2.0](../../LICENSE).
+
 **That's it! You're ready to use AI-SRE-Ops.** 🚀
 
