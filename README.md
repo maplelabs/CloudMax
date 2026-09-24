@@ -2,7 +2,7 @@
 
 AI-powered Site Reliability Engineering Alert Dashboard with automated, configurable LLM-backed triage.
 
-> **Quick start:** This README covers starting the full application. See [diagnostic MCP server docs](./diagnostics/mcp-server/README.md) for MCP-specific setup and troubleshooting.
+> **Quick start:** This README covers starting the full application.
 
 ## Prerequisites
 
@@ -97,7 +97,7 @@ make full-stack-mtls up
 
 This mode requires valid client certificates to be configured. It is a local integration-test option, not production deployment guidance. Stop it with `make full-stack-mtls down`.
 
-For MCP-specific configuration and troubleshooting, see [the diagnostic MCP server guide](./diagnostics/mcp-server/README.md). The [system architecture overview](./diagnostics/mcp-server/README.md#system-architecture) is also available there. Booking-specific diagnostics are documented separately under [demos/booking-demo](./demos/booking-demo/README.md).
+For MCP-specific configuration and troubleshooting, see the [Diagnostic MCP Server documentation](#diagnostic-mcp-server).
 
 ## Database Migrations
 
@@ -165,3 +165,7 @@ To forward alerts from Grafana to the Alert Dashboard, configure a webhook in th
 - Click **Save policy**.  
 
 Grafana alerts matching the policy will now be sent to the Alert Dashboard.
+
+## Diagnostic MCP Server
+
+For setup, configuration, troubleshooting, and system architecture of the diagnostic MCP server, see the [Diagnostic MCP Server guide](./diagnostics/mcp-server/README.md). Booking-specific diagnostics are covered in the [Booking Demo documentation](./demos/booking-demo/README.md).
