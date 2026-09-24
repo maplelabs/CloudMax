@@ -164,8 +164,8 @@ services:
   # ==========================================================================
   frontend:
     build:
-      context: ./core/frontend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: core/frontend/Dockerfile
       args:
         # Self-signed certificate configuration
         CERT_DOMAINS: "cloudmax.xoriant.com,localhost"

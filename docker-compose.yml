@@ -195,8 +195,8 @@ services:
   # ==========================================================================
   frontend:
     build:
-      context: ./core/frontend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: core/frontend/Dockerfile
       args:
         BACKEND_URL: http://backend:8000
         # Self-signed certificate configuration

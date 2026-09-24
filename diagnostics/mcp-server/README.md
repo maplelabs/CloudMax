@@ -607,9 +607,6 @@ For more details, see:
 
 ---
 
-## License
-
-See LICENSE file for details.
 
 **That's it! You're ready to use AI-SRE-Ops.** 🚀
 

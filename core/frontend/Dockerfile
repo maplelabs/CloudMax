@@ -26,10 +26,11 @@ RUN PRIMARY_DOMAIN=$(echo "${CERT_DOMAINS}" | cut -d',' -f1) && \
 FROM node:22 AS build
 WORKDIR /app
 
-COPY package*.json ./
+COPY core/frontend/package*.json ./
 RUN npm ci --silent
 
-COPY . .
+COPY core/frontend/ ./
+COPY THIRD_PARTY_NOTICES.md ./public/THIRD_PARTY_NOTICES.md
 RUN npm run build
 
 # Stage 3: Nginx with HTTPS

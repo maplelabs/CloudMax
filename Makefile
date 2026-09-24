@@ -323,7 +323,8 @@ _build-and-push-images:
 	echo "Building and pushing frontend image ($(VERSION))..."; \
 	docker buildx build $$BUILDER_ARG --platform $$BUILD_PLATFORM --push \
 		--build-arg BACKEND_URL=$(DEFAULT_API_URL) \
-		-t $(FRONTEND_IMAGE):$(VERSION) ./core/frontend; \
+		-f core/frontend/Dockerfile \
+		-t $(FRONTEND_IMAGE):$(VERSION) .; \
 	echo "Images built and pushed successfully!"; \
 	echo "  Platform: $$BUILD_PLATFORM"; \
 	echo "  Backend:  $(BACKEND_IMAGE):$(VERSION)"; \
