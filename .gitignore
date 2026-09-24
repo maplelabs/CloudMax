@@ -1,0 +1,154 @@
+# Python Backend
+.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Deepeval framework
+.deepeval/
+
+# Frontend Node.js
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/coverage/
+frontend/.eslintcache
+frontend/.stylelintcache
+
+# General Node.js patterns (for any frontend directories)
+**/node_modules/
+**/dist/
+**/build/
+**/.vite/
+**/coverage/
+**/.eslintcache
+**/.stylelintcache
+**/npm-debug.log*
+**/yarn-debug.log*
+**/yarn-error.log*
+
+# Environment files
+**.env
+
+# TLS/SSL certificates and keys (security - never commit private keys)
+*.pem
+*.key
+*.crt
+*.csr
+*.p12
+*.pfx
+
+# IDE and Editor files
+.idea/
+.vscode/
+!.vscode/extensions.json
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Docker
+.dockerignore
+
+# Helm
+charts/ai-sre-app/charts/
+**/helm-values-mtls.yaml
+
+# Temporary files
+tmp/
+temp/
+
+# Package manager lock files (optional - some teams prefer to track these)
+# Uncomment the following lines if you don't want to track lock files
+# package-lock.json
+# yarn.lock
+# pnpm-lock.yaml
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Dependency directories
+jspm_packages/
+
+# Optional npm cache directory
+.npm
+
+# Optional REPL history
+.node_repl_history
+
+# Output of 'npm pack'
+*.tgz
+
+# Yarn Integrity file
+.yarn-integrity
+
+# parcel-bundler cache (https://parceljs.org/)
+.cache
+.parcel-cache
+
+# next.js build output
+.next
+
+# nuxt.js build output
+.nuxt
+
+# vuepress build output
+.vuepress/dist
+
+# Serverless directories
+.serverless
+
+# FuseBox cache
+.fusebox/
+
+# DynamoDB Local files
+.dynamodb/
+
+# TernJS port file
+.tern-port
+
+# Superpowers AI-generated specs and working files
+# These are session-specific and should not be committed
+docs/superpowers/
+
+# Local cache debugging and test scripts
+code-triage-agent/CACHE_DEBUGGING.md
+code-triage-agent/CACHE_MONITORING.md
+code-triage-agent/test_cache_monitor.py
+docs/superpowers/*
