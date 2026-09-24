@@ -9,15 +9,15 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/maplelabs/ai-sre-ops.git"
+    "url": "git+https://github.com/maplelabs/CloudMax.git"
   },
   "keywords": [],
   "author": "",
   "license": "Apache-2.0",
   "bugs": {
-    "url": "https://github.com/maplelabs/ai-sre-ops/issues"
+    "url": "https://github.com/maplelabs/CloudMax/issues"
   },
-  "homepage": "https://github.com/maplelabs/ai-sre-ops#readme",
+  "homepage": "https://github.com/maplelabs/CloudMax#readme",
   "devDependencies": {
     "husky": "^9.1.7"
   }
