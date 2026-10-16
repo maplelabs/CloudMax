@@ -1,5 +1,7 @@
 FROM python:3.11-slim
 
+RUN groupadd --system app && useradd --system --gid app --create-home app
+
 # Set working directory
 WORKDIR /app
 
@@ -19,12 +21,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Create logs directory
-RUN mkdir -p logs
+RUN mkdir -p logs && chown -R app:app /app
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 ENV LOG_LEVEL=INFO
 ENV PYTHONPATH=/app:$PYTHONPATH
+
+USER app
 
 # Expose ports
 EXPOSE 8002
