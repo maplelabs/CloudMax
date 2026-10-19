@@ -24,9 +24,10 @@ if command -v openssl >/dev/null 2>&1; then
 fi
 
 # Substitute environment variables
-envsubst "\$BACKEND_URL" < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
+NGINX_CONFIG=/tmp/nginx.conf
+envsubst "\$BACKEND_URL" < /etc/nginx/nginx.conf.template > "$NGINX_CONFIG"
 
 # Validate and start nginx
-nginx -t
+nginx -t -c "$NGINX_CONFIG"
 echo "Starting nginx..."
-exec nginx -g "daemon off;"
+exec nginx -c "$NGINX_CONFIG" -g "daemon off;"

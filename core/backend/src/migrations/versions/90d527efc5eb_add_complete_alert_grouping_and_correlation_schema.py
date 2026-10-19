@@ -168,10 +168,16 @@ def upgrade() -> None:
     }
 
     config_json = json.dumps(default_config)
-    # Use direct string formatting - bindparams doesn't work with ::jsonb cast
-    op.execute(
-        f"UPDATE app_config SET alert_grouping_config = '{config_json}'::jsonb WHERE alert_grouping_config IS NULL"
-    )
+    conn.execute(
+        sa.text(
+            """
+            UPDATE app_config
+            SET alert_grouping_config = CAST(:config_json AS jsonb)
+            WHERE alert_grouping_config IS NULL
+            """
+        ),
+        {"config_json": config_json},
+    ) 
 
     # ================================================================
     # PART 6: Add alert_grouping_enabled flag to app_config

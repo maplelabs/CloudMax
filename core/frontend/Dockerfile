@@ -37,7 +37,8 @@ RUN npm run build
 FROM nginx:alpine
 ARG BACKEND_URL
 
-RUN apk add --no-cache gettext
+RUN apk add --no-cache gettext libcap && \
+    setcap 'cap_net_bind_service=+ep' /usr/sbin/nginx
 
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY --from=cert-generator /certs/minica.pem /etc/nginx/certs/ca.pem
@@ -48,8 +49,12 @@ COPY --from=cert-generator /certs/primary-cert/key.pem /etc/nginx/certs/key.pem
 #COPY docker-entrypoint.sh /docker-entrypoint.sh
 COPY core/frontend/nginx.conf /etc/nginx/nginx.conf.template
 COPY core/frontend/docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh && \
+    chown -R nginx:nginx /usr/share/nginx/html /etc/nginx/certs /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
 
 EXPOSE 80 443
+
+USER nginx
 
 CMD ["/docker-entrypoint.sh"]
