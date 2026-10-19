@@ -45,7 +45,9 @@ def _get_bookings_by_time_range_sync(
         query = sql.SQL(
             "SELECT booking_id FROM {} WHERE created_at BETWEEN %s AND %s ORDER BY created_at"
         ).format(sql.Identifier(table_name))
-        
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+        # Safe by construction: table_name is validated against a fixed allowlist and
+        # injected as an Identifier, while the time bounds remain bound parameters.
         cursor.execute(query, (start_time, end_time))
         results = cursor.fetchall()
         cursor.close()

@@ -60,6 +60,9 @@ def _check_booking_presence_sync(
         query = sql.SQL("SELECT 1 FROM {} WHERE booking_id = %s LIMIT 1").format(
             sql.Identifier(table_name)
         )
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+        # Safe by construction: table_name is validated against a fixed allowlist and
+        # injected as an Identifier, while booking_id remains a bound parameter.
         cursor.execute(query, (booking_id,))
         result = cursor.fetchone()
         cursor.close()
