@@ -413,7 +413,8 @@ services:
 
   # MinIO for Langfuse (internal)
   minio:
-    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    #image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    image: cgr.dev/chainguard/minio:latest
     restart: always
     entrypoint: sh
     command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'

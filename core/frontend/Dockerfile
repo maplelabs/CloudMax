@@ -44,8 +44,10 @@ COPY --from=cert-generator /certs/minica.pem /etc/nginx/certs/ca.pem
 COPY --from=cert-generator /certs/primary-cert/cert.pem /etc/nginx/certs/cert.pem
 COPY --from=cert-generator /certs/primary-cert/key.pem /etc/nginx/certs/key.pem
 
-COPY nginx.conf /etc/nginx/nginx.conf.template
-COPY docker-entrypoint.sh /docker-entrypoint.sh
+#COPY nginx.conf /etc/nginx/nginx.conf.template
+#COPY docker-entrypoint.sh /docker-entrypoint.sh
+COPY core/frontend/nginx.conf /etc/nginx/nginx.conf.template
+COPY core/frontend/docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
 
 EXPOSE 80 443
