@@ -51,6 +51,7 @@ COPY core/frontend/nginx.conf /etc/nginx/nginx.conf.template
 COPY core/frontend/docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh && \
     chown -R nginx:nginx /usr/share/nginx/html /etc/nginx/certs /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
 
 EXPOSE 80 443
 
