@@ -20,7 +20,7 @@ export function decodeJWT(token: string): DecodedToken | null {
 }
 
 export function getUserIdFromToken(): string | null {
-  const token = localStorage.getItem("access_token");
+  const token = sessionStorage.getItem("access_token");
   if (!token) {
     return null;
   }
@@ -30,7 +30,7 @@ export function getUserIdFromToken(): string | null {
 }
 
 export function getUserInfoFromToken(): DecodedToken | null {
-  const token = localStorage.getItem("access_token");
+  const token = sessionStorage.getItem("access_token");
   if (!token) {
     return null;
   }

@@ -1,4 +1,5 @@
 import os
+import secrets
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 
@@ -6,7 +7,7 @@ import jwt
 from passlib.context import CryptContext
 
 # JWT Configuration
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "changeme")
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY") or os.environ.setdefault("JWT_SECRET_KEY", secrets.token_urlsafe(32))
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "15"))
 REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))

@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlalchemy import select, func, or_, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +17,7 @@ from src.server.models.api.auth import (
     UserListResponse,
     UserCreate,
     UserLogin,
+    RefreshTokenRequest,
     Token,
     UpdatePassword,
     AdminResetPassword,
@@ -37,6 +38,23 @@ from src.server.utilities.auth_utils import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["auth"])
+
+_LOGIN_ATTEMPT_WINDOW_SECONDS = 300
+_LOGIN_MAX_ATTEMPTS = 5
+_login_attempts: dict[str, list[datetime]] = {}
+
+
+def _enforce_login_rate_limit(email: str) -> None:
+    """Reject repeated login attempts for the same email within a short window."""
+    now = datetime.now(timezone.utc)
+    attempts = _login_attempts.setdefault(email, [])
+    attempts[:] = [attempt_ts for attempt_ts in attempts if (now - attempt_ts).total_seconds() < _LOGIN_ATTEMPT_WINDOW_SECONDS]
+
+    if len(attempts) >= _LOGIN_MAX_ATTEMPTS:
+        logger.warning(f"[LOGIN] Rate limit exceeded | email={email} attempts={len(attempts)}")
+        raise HTTPException(status_code=429, detail="Too many login attempts. Please try again later.")
+
+    attempts.append(now)
 
 
 # === Global Async DB Error Handler ===
@@ -134,6 +152,8 @@ async def login(user: UserLogin, db: AsyncSession = Depends(get_db_session)):
     - Stores refresh token in DB (hashed) for session tracking.
     """
     logger.info(f"[LOGIN] Login attempt | email={user.email}")
+    _enforce_login_rate_limit(str(user.email))
+
     res = await db.execute(select(User).where(User.email == user.email))
     db_user = res.scalars().first()
 
@@ -176,14 +196,15 @@ async def login(user: UserLogin, db: AsyncSession = Depends(get_db_session)):
 
 @router.post("/users/refresh", response_model=Token)
 @handle_db_errors
-async def refresh_token(refresh_token: str, db: AsyncSession = Depends(get_db_session)):
+async def refresh_token(payload: RefreshTokenRequest = Body(...), db: AsyncSession = Depends(get_db_session)):
     """
     Refresh access tokens using a valid refresh token.
     - Validates JWT and verifies the hashed token in DB.
     - Checks expiry and user validity.
-    - Rotates refresh tokens in place .
+    - Rotates refresh tokens in place.
     """
     logger.info("[REFRESH] Token refresh request received")
+    refresh_token = payload.refresh_token
 
     payload = decode_token(refresh_token)
     if not payload or payload.get("type") != "refresh":
@@ -229,7 +250,7 @@ async def refresh_token(refresh_token: str, db: AsyncSession = Depends(get_db_se
 
     access_token = create_access_token(data)
     new_refresh_token, new_expiry = create_refresh_token(data)
-    matched_token.token = hash_token(new_refresh_token)
+    matched_token.token_hash = hash_token(new_refresh_token)
     matched_token.expires_at = new_expiry
 
     db.add(matched_token)

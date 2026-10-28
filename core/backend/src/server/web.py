@@ -109,13 +109,19 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
+cors_allowed_origins = os.getenv(
+    "CORS_ALLOWED_ORIGINS",
+    "https://cloudmax.xoriant.com,https://localhost,https://localhost:3101,http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173",
+).split(",")
+
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
+    allow_origins=[origin.strip() for origin in cors_allowed_origins if origin.strip()],
+    allow_origin_regex=r"https://.*\\.xoriant\\.com",
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
 )
 
 
