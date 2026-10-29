@@ -1,0 +1,50 @@
+name: Engineering task
+description: Track engineering work that isn't a bug or user-facing feature (e.g. refactor, tooling, tech debt).
+title: "[Task]: "
+labels: ["task"]
+body:
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Why does this task need to be done?
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: What is in scope and out of scope for this task?
+    validations:
+      required: true
+  - type: textarea
+    id: tests
+    attributes:
+      label: Tests
+      description: What tests should be added or updated to cover this work?
+    validations:
+      required: false
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: List concrete, checkable conditions for this task to be considered done.
+      value: |
+        - [ ]
+        - [ ]
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: Other issues, systems, or teams this task depends on, if any.
+    validations:
+      required: false
+  - type: textarea
+    id: security_privacy
+    attributes:
+      label: Security / privacy impact
+      description: Note any security or privacy impact, or state "None".
+    validations:
+      required: true
