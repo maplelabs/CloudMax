@@ -1,4 +1,4 @@
-# AI-SRE-Ops
+# CloudMax
 
 AI-powered Site Reliability Engineering Alert Dashboard with automated, configurable LLM-backed triage.
 
@@ -80,7 +80,7 @@ python -m venv .venv
 # macOS/Linux: source .venv/bin/activate
 # Windows PowerShell: .\.venv\Scripts\Activate.ps1
 python -m pip install -r py_requirements.txt
-uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn src.server.web:app --reload --host 0.0.0.0 --port 8000
 ```
 
 The backend API is at <http://localhost:8000>; the containerized frontend is at <https://localhost:8443> (with a local-certificate warning). Stop supporting services with `make backend-development-stack down` from the repository root.
@@ -169,3 +169,10 @@ Grafana alerts matching the policy will now be sent to the Alert Dashboard.
 ## Diagnostic MCP Server
 
 For setup, configuration, troubleshooting, and system architecture of the diagnostic MCP server, see the [Diagnostic MCP Server guide](./diagnostics/mcp-server/README.md). Booking-specific diagnostics are covered in the [Booking Demo documentation](./demos/booking-demo/README.md).
+
+## Additional Documentation
+
+- [Documentation index](./docs/README.md) — full list of guides, including integration-specific references
+- [Contributing guide](./CONTRIBUTING.md)
+- [Security policy](./SECURITY.md)
+- [License](./LICENSE)
