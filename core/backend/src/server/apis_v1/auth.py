@@ -169,8 +169,6 @@ async def login(user: UserLogin, db: AsyncSession = Depends(get_db_session)):
 
     data = {
         "sub": str(db_user.id),
-        "email": db_user.email,
-        "username": db_user.username,
         "admin": db_user.admin,
     }
 
@@ -243,8 +241,6 @@ async def refresh_token(payload: RefreshTokenRequest = Body(...), db: AsyncSessi
 
     data = {
         "sub": str(user.id),
-        "email": user.email,
-        "username": user.username,
         "admin": user.admin,
     }
 

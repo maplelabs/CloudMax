@@ -2,12 +2,12 @@ import { jwtDecode } from "jwt-decode";
 
 export interface DecodedToken {
   sub: string; // user_id
-  email: string;
-  username: string;
   admin: boolean;
   exp: number;
   iat: number;
   type: string;
+  username?: string;
+  email?: string;
 }
 
 export function decodeJWT(token: string): DecodedToken | null {
