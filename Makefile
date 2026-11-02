@@ -256,7 +256,7 @@ ifeq ($(filter up,$(MAKECMDGOALS)),up)
 	@echo "Checking if backend is running..."
 	@if ! curl -f -s http://localhost:8000/health > /dev/null 2>&1; then \
 		echo "WARNING: Backend is not running on http://localhost:8000. Frontend container WOULD HAVE failed."; \
-		echo "Please start your backend: cd core/backend && uvicorn src.main:app --reload --host 0.0.0.0 --port 8000"; \
+		echo "Please start your backend: cd core/backend && uvicorn src.server.web:app --reload --host 0.0.0.0 --port 8000"; \
 	fi
 else ifeq ($(filter down,$(MAKECMDGOALS)),down)
 	@echo "Stopping backend development stack..."
@@ -280,7 +280,7 @@ else ifeq ($(filter restart,$(MAKECMDGOALS)),restart)
 		echo "ERROR: Backend is not running on http://localhost:8000"; \
 		echo ""; \
 		echo "Please ensure your backend is running before restarting the stack:"; \
-		echo "  cd core/backend && uvicorn src.main:app --reload --host 0.0.0.0 --port 8000"; \
+		echo "  cd core/backend && uvicorn src.server.web:app --reload --host 0.0.0.0 --port 8000"; \
 		echo ""; \
 		exit 1; \
 	fi
