@@ -34,7 +34,8 @@ COPY THIRD_PARTY_NOTICES.md ./public/THIRD_PARTY_NOTICES.md
 RUN npm run build
 
 # Stage 3: Nginx with HTTPS
-FROM nginx:1.27-alpine
+ARG NGINX_IMAGE_VERSION=1.27.5-alpine
+FROM nginx:${NGINX_IMAGE_VERSION}
 ARG BACKEND_URL
 
 RUN apk add --no-cache gettext libcap && \

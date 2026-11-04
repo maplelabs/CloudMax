@@ -35,6 +35,33 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _sanitize_error_detail(detail):
+    """Return a safe client-facing error message and avoid leaking internal details."""
+    if isinstance(detail, dict):
+        return "Request failed"
+    if isinstance(detail, list):
+        return "Request failed"
+    if isinstance(detail, str):
+        normalized = detail.lower()
+        allowlist = [
+            "invalid credentials",
+            "too many login attempts",
+            "not found",
+            "unauthorized",
+            "forbidden",
+            "invalid request",
+            "token expired",
+            "token revoked",
+            "request failed",
+            "bad request",
+            "rate limit",
+        ]
+        if any(item in normalized for item in allowlist):
+            return detail
+        return "Request failed"
+    return "Request failed"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -135,10 +162,11 @@ async def request_validation_exception_handler(request: Request, exc: RequestVal
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
+    safe_detail = _sanitize_error_detail(exc.detail)
     if exc.status_code >= 500:
         logger.exception(f"[HTTP-ERROR] Server error | path={request.url.path}")
         return JSONResponse(status_code=500, content={"detail": "Internal server error"})
-    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    return JSONResponse(status_code=exc.status_code, content={"detail": safe_detail})
 
 
 @app.exception_handler(Exception)
