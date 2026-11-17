@@ -6,11 +6,20 @@ OS + data disks (snapshot-restored or fresh — see
 NIC, NSG (443/80 only), static public IP, and a system-assigned managed
 identity with `AcrPull` + Key Vault secret `get`/`list`.
 
-**Status:** draft scaffold for review — see the `KNOWN LIMITATION` comment in
-`main.tf` regarding attaching a snapshot-restored OS disk to
-`azurerm_linux_virtual_machine`; this needs to be resolved (via `azapi` or a
-custom image) before this module is used for a real steady-state
-(snapshot-restore) create.
+**Status:** draft scaffold for review. The VM is defined via the `azapi`
+provider (raw `Microsoft.Compute/virtualMachines`) rather than
+`azurerm_linux_virtual_machine`, specifically so the steady-state
+(snapshot-restore) path can attach the pre-existing, snapshot-copied OS disk
+directly (`storageProfile.osDisk.createOption = "Attach"`) — something
+`azurerm_linux_virtual_machine`'s `os_disk` block does not support, since it
+always provisions a brand-new disk. The bootstrap (first-run, no snapshot
+yet) path instead provisions the OS disk inline from `var.base_image`
+(`createOption = "FromImage"`), since a standalone managed disk cannot be
+created directly from a marketplace image outside of VM creation.
+
+Note: the `azapi` provider requires Terraform CLI/plan access to validate —
+this has not yet been run (`terraform validate`/`plan`) in this environment;
+do so before merging.
 
 ## Usage
 

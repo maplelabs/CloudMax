@@ -103,20 +103,29 @@ resource "azurerm_network_interface" "demo" {
 }
 
 resource "azurerm_network_interface_security_group_association" "demo" {
-  network_interface_id     = azurerm_network_interface.demo.id
+  network_interface_id      = azurerm_network_interface.demo.id
   network_security_group_id = azurerm_network_security_group.demo.id
 }
 
 # --- Disks: snapshot-restored (steady-state) or fresh (bootstrap) -----------
+#
+# OS disk: only pre-created here for the steady-state (snapshot-restore)
+# path, where `Copy` from an existing snapshot is a valid standalone managed
+# disk operation that can then be attached to the VM via `Attach` (see VM
+# resource below). The bootstrap path (no snapshot yet) does NOT pre-create
+# an OS disk here -- `FromImage` against a marketplace image is only valid
+# as part of VM creation itself (it needs the VM's osProfile to provision
+# the OS), not as a standalone azurerm_managed_disk. For bootstrap, the VM
+# resource creates its OS disk inline from `var.base_image`.
 
 resource "azurerm_managed_disk" "os" {
+  count                = local.restore_from_snapshot ? 1 : 0
   name                 = "${local.name_prefix}-os-disk"
   resource_group_name  = data.azurerm_resource_group.demo.name
   location             = var.location
   storage_account_type = "Standard_LRS"
-  create_option        = local.restore_from_snapshot ? "Copy" : "FromImage"
-  source_resource_id   = local.restore_from_snapshot ? var.os_disk_snapshot_id : null
-  disk_size_gb         = local.restore_from_snapshot ? null : var.os_disk_size_gb
+  create_option        = "Copy"
+  source_resource_id   = var.os_disk_snapshot_id
   os_type              = "Linux"
   tags                 = local.common_tags
 }
@@ -133,67 +142,105 @@ resource "azurerm_managed_disk" "data" {
 }
 
 # --- VM -----------------------------------------------------------------------
+#
+# Defined via azapi_resource (raw Microsoft.Compute/virtualMachines), not
+# azurerm_linux_virtual_machine, because the steady-state (snapshot-restore)
+# path needs storageProfile.osDisk.createOption = "Attach" against the
+# pre-existing azurerm_managed_disk.os[0] -- azurerm_linux_virtual_machine's
+# os_disk block cannot attach an existing disk, it only ever provisions a new
+# one. The bootstrap path instead sets createOption = "FromImage" with an
+# inline imageReference, letting the VM provision its own fresh OS disk.
 
-resource "azurerm_linux_virtual_machine" "demo" {
-  name                = "${local.name_prefix}-vm"
-  resource_group_name = data.azurerm_resource_group.demo.name
-  location            = var.location
-  size                = var.vm_size
-  admin_username      = var.admin_username
-  tags                = local.common_tags
-
-  network_interface_ids = [azurerm_network_interface.demo.id]
-
-  admin_ssh_key {
-    username   = var.admin_username
-    public_key = var.admin_ssh_public_key
-  }
-
-  # KNOWN LIMITATION (flagged for review, not yet resolved in this draft):
-  # azurerm_linux_virtual_machine's `os_disk` block always provisions a NEW
-  # managed disk for the VM; it cannot attach the pre-existing
-  # `azurerm_managed_disk.os` (snapshot-restored or fresh) created above as
-  # the VM's actual OS disk. Resolving the steady-state "restore OS disk from
-  # snapshot" path correctly requires one of:
-  #   (a) azapi_resource for Microsoft.Compute/virtualMachines with an
-  #       explicit `storageProfile.osDisk.managedDisk.id` pointing at
-  #       azurerm_managed_disk.os.id, or
-  #   (b) building a custom azurerm_image from the OS snapshot and using that
-  #       as the VM's os_disk source image.
-  # Tracked as a follow-up before this module is used for a real steady-state
-  # (snapshot-restore) create; bootstrap (FromImage) path below is unaffected.
-  os_disk {
-    name                 = "${local.name_prefix}-os-disk-attached"
-    caching              = "ReadWrite"
-    storage_account_type = "Standard_LRS"
-  }
-
-  dynamic "source_image_reference" {
-    for_each = local.restore_from_snapshot ? [] : [var.base_image]
-    content {
-      publisher = source_image_reference.value.publisher
-      offer     = source_image_reference.value.offer
-      sku       = source_image_reference.value.sku
-      version   = source_image_reference.value.version
-    }
-  }
+resource "azapi_resource" "demo_vm" {
+  type      = "Microsoft.Compute/virtualMachines@2023-09-01"
+  name      = "${local.name_prefix}-vm"
+  location  = var.location
+  parent_id = data.azurerm_resource_group.demo.id
+  tags      = local.common_tags
 
   identity {
     type = "SystemAssigned"
   }
 
-  lifecycle {
-    # Re-running apply against an already-provisioned demo must not recreate
-    # the VM due to disk/image drift (idempotency, per acceptance criteria).
-    ignore_changes = [source_image_reference]
-  }
-}
+  body = {
+    properties = {
+      hardwareProfile = {
+        vmSize = var.vm_size
+      }
 
-resource "azurerm_virtual_machine_data_disk_attachment" "data" {
-  managed_disk_id    = azurerm_managed_disk.data.id
-  virtual_machine_id = azurerm_linux_virtual_machine.demo.id
-  lun                = 0
-  caching            = "ReadWrite"
+      # osProfile is only required/valid when the OS disk is provisioned
+      # fresh (bootstrap, FromImage) -- it must be omitted entirely when
+      # attaching a pre-existing (already-provisioned) OS disk.
+      osProfile = local.restore_from_snapshot ? null : {
+        computerName  = "${local.name_prefix}-vm"
+        adminUsername = var.admin_username
+        linuxConfiguration = {
+          disablePasswordAuthentication = true
+          ssh = {
+            publicKeys = [
+              {
+                path    = "/home/${var.admin_username}/.ssh/authorized_keys"
+                keyData = var.admin_ssh_public_key
+              }
+            ]
+          }
+        }
+      }
+
+      storageProfile = {
+        osDisk = local.restore_from_snapshot ? {
+          createOption = "Attach"
+          osType       = "Linux"
+          caching      = "ReadWrite"
+          managedDisk = {
+            id = azurerm_managed_disk.os[0].id
+          }
+          } : {
+          createOption = "FromImage"
+          caching      = "ReadWrite"
+          diskSizeGB   = var.os_disk_size_gb
+          managedDisk = {
+            storageAccountType = "Standard_LRS"
+          }
+          imageReference = {
+            publisher = var.base_image.publisher
+            offer     = var.base_image.offer
+            sku       = var.base_image.sku
+            version   = var.base_image.version
+          }
+        }
+
+        dataDisks = [
+          {
+            lun          = 0
+            createOption = "Attach"
+            caching      = "ReadWrite"
+            managedDisk = {
+              id = azurerm_managed_disk.data.id
+            }
+          }
+        ]
+      }
+
+      networkProfile = {
+        networkInterfaces = [
+          {
+            id = azurerm_network_interface.demo.id
+          }
+        ]
+      }
+    }
+  }
+
+  # Re-running apply against an already-provisioned demo must not recreate
+  # the VM due to image/OS-disk drift (idempotency, per acceptance criteria).
+  lifecycle {
+    ignore_changes = [body.properties.storageProfile.osDisk.imageReference]
+  }
+
+  depends_on = [
+    azurerm_network_interface_security_group_association.demo,
+  ]
 }
 
 # --- Managed identity access: AcrPull + Key Vault get/list ------------------
@@ -201,13 +248,13 @@ resource "azurerm_virtual_machine_data_disk_attachment" "data" {
 resource "azurerm_role_assignment" "acr_pull" {
   scope                = var.container_registry_id
   role_definition_name = "AcrPull"
-  principal_id         = azurerm_linux_virtual_machine.demo.identity[0].principal_id
+  principal_id         = azapi_resource.demo_vm.identity[0].principal_id
 }
 
 resource "azurerm_key_vault_access_policy" "demo_vm" {
   key_vault_id = var.key_vault_id
-  tenant_id    = azurerm_linux_virtual_machine.demo.identity[0].tenant_id
-  object_id    = azurerm_linux_virtual_machine.demo.identity[0].principal_id
+  tenant_id    = azapi_resource.demo_vm.identity[0].tenant_id
+  object_id    = azapi_resource.demo_vm.identity[0].principal_id
 
   secret_permissions = ["Get", "List"]
 }
