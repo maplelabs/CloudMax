@@ -1,0 +1,126 @@
+# DEMO-01.5 — Secure Demo Environment Credentials with OIDC & Least-Privilege Scoping
+
+| | |
+|---|---|
+| **Status** | Draft — pending repository owner review/approval |
+| **Applies to** | `maplelabs/CloudMax` ephemeral demo environment (DEMO-01) |
+| **Related** | IMG-01.4 (registry credentials pattern) · DEMO-01.1 (lifecycle strategy) · DEMO-01.2 (Terraform module, merged in #66) · DEMO-01.3/01.4 (create/destroy workflows — depend on this) |
+
+## 1. Purpose
+
+DEMO-01.2's Terraform module already references two forms of credential need
+that don't yet have a real identity or secret-delivery path behind them:
+
+1. **CI/CD → Azure auth** — DEMO-01.3's create workflow and DEMO-01.4's
+   destroy workflow need to authenticate to Azure to run
+   `terraform apply`/`destroy`, snapshot operations, and resource cleanup.
+2. **VM → application secrets** — the demo VM's managed identity (already
+   wired into the Terraform module as `AcrPull` + Key Vault `get`/`list`)
+   needs an actual Key Vault to pull real runtime secrets from (DB passwords,
+   LLM API keys, etc.) once `docker compose up` brings the CloudMax stack
+   online on that VM.
+
+This document defines how both are secured, following the same no-stored-
+secrets pattern already used in IMG-01.4 (ACR push via OIDC, no registry
+password).
+
+## 2. Two distinct identities — do not conflate
+
+| | CI/CD identity (this doc, §3) | VM runtime identity (already built in DEMO-01.2) |
+|---|---|---|
+| **What it is** | New Azure AD App Registration + federated credential | VM's system-assigned managed identity (created automatically when the VM is provisioned) |
+| **Used by** | GitHub Actions (create/destroy workflows) | The CloudMax application processes running on the demo VM |
+| **Used for** | `terraform apply`/`destroy`, snapshot create/verify/prune, resource cleanup checks | Pulling images from ACR (`AcrPull`), fetching app secrets from Key Vault (`get`/`list`) |
+| **Scope needed** | `Contributor` on the `cloudmax` resource group | `AcrPull` on the registry, `get`/`list` on specific Key Vault secrets |
+| **Already exists?** | **No — this is what DEMO-01.5 creates** | Yes — wired into DEMO-01.2's `main.tf`, but the Key Vault it points at doesn't exist yet |
+
+DEMO-01.5's scope is deliberately split into these two tracks below.
+
+## 3. Track A — CI/CD → Azure authentication (new App Registration)
+
+Same pattern as the existing `cloudmax-github-actions-cicd` registration used
+by IMG-01 (image build/push), but this is a **separate, independently scoped**
+registration — not a reuse of the image-pipeline identity, since DEMO-01's
+workflows need `Contributor` (to create/destroy infrastructure), which is a
+materially larger blast radius than IMG-01's `AcrPush`-only scope.
+
+| Item | Decision |
+|---|---|
+| App Registration name | `cloudmax-demo-env-cicd` (separate from `cloudmax-github-actions-cicd`) |
+| Credential type | Federated credential (OIDC) — **no client secret generated, ever** |
+| Federated credential subject | `repo:maplelabs/CloudMax:environment:demo` — scoped to the GitHub **Environment** `demo`, not just a branch ref (see §5 on why Environment-scoping, not branch-scoping, is used here) |
+| Role assignment | `Contributor`, scoped to the `cloudmax` resource group only — **not** subscription-wide, **not** tenant-wide |
+| Why `Contributor` (vs. IMG-01's narrower `AcrPush`) | Create/destroy workflows need to provision and tear down VMs, disks, NICs, NSGs, public IPs, and snapshots — there's no single built-in role narrower than `Contributor` that covers all of DEMO-01.2's resource types within one RG; subscription-level scope is explicitly avoided to bound blast radius to `cloudmax` only |
+
+## 4. Track B — VM runtime secrets (Key Vault provisioning)
+
+| Item | Decision |
+|---|---|
+| New resource | 1 Azure Key Vault, e.g. `cloudmax-demo-kv`, in the `cloudmax` resource group |
+| Access model | **Access policy** (matches DEMO-01.2's `azurerm_key_vault_access_policy` resource already written) granting the VM's system-assigned managed identity `Get`/`List` on **secrets** only — no `Set`/`Delete`/`Purge`, no key/certificate permissions |
+| What goes in it | Runtime secrets the CloudMax stack needs at `docker compose up` time: DB connection string/password, Azure OpenAI key, Anthropic/Claude key, any other integration credentials currently used by the long-lived manual demo VM |
+| How the app retrieves them | At VM boot / container start, the app (or an init step before `docker compose up`) calls Key Vault directly using the VM's managed identity — **no secret is baked into the image, no secret is written to a cloud-init script or the VM's disk as plaintext, no secret is ever present in GitHub** |
+| Who populates the Key Vault initially | Out of scope for automation — a one-time manual step by the repository owner/admin, since there's no safe automated path to the *source* of these secrets (they come from existing service accounts/subscriptions, not generated by this pipeline) |
+
+## 5. GitHub configuration
+
+| Item | Decision |
+|---|---|
+| GitHub Environment | `demo` (new) — distinct from however IMG-01's identifiers are configured, so demo create/destroy has its own approval/secret boundary |
+| Secrets stored | `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` — **Environment secrets**, not repository secrets, and never written into workflow YAML directly |
+| Why Environment (not repo) secrets | Environment secrets can be gated by required reviewers — matches DEMO-01.1 §3's destroy-is-destructive requirement (DEMO-01.4 already specifies "gated by a required reviewer") and keeps demo credentials separate from IMG-01's registry-push credentials |
+| Why federated credential subject is Environment-scoped, not branch-scoped | IMG-01's subject (`repo:...:ref:refs/heads/main`) is appropriate for a push-triggered, no-review pipeline. DEMO-01's workflows are `workflow_dispatch`-triggered (per DEMO-01.1 §3) and explicitly reviewer-gated for destroy — binding the federated credential to the `demo` **Environment** (rather than just the `main` ref) lets GitHub's own Environment protection rules (required reviewers) sit directly in front of who can obtain this Azure identity, not just who can push to `main` |
+
+## 6. Trigger safety (explicit confirmation required by acceptance criteria)
+
+Both create (DEMO-01.3) and destroy (DEMO-01.4) workflows must be confirmed,
+before this identity is wired in, to:
+- Trigger **only** on `workflow_dispatch` (manual) or the DEMO-01.1 §3.2
+  scheduled idle-timeout check (`schedule: cron`, which is not
+  fork/PR-triggerable)
+- **Never** trigger on `pull_request` or any event where a fork or untrusted
+  branch could invoke them — this is the same trust boundary IMG-01.1 already
+  established (PR CI never gets registry/publish credentials; the analogous
+  rule here is PR CI never gets `Contributor` access to `cloudmax`)
+
+This is a confirmation step against DEMO-01.3/01.4's actual workflow files
+once written — not something DEMO-01.5 itself implements, since those
+workflows don't exist yet. Listed here as a gate that must be re-checked
+when DEMO-01.3/01.4 are built.
+
+## 7. What DEMO-01.5 does NOT cover
+
+- Does not populate the Key Vault with real secret values (manual, one-time,
+  by the repo owner — see §4)
+- Does not build the create/destroy workflows themselves (DEMO-01.3/01.4) —
+  only prepares the identity/auth those workflows will consume
+- Does not change DEMO-01.2's Terraform module — it already references
+  `var.key_vault_id`/`var.container_registry_id` correctly; this task's job
+  is making those IDs resolve to real resources
+
+## 8. Open questions for reviewer sign-off
+
+- Confirm `cloudmax-demo-kv` is an acceptable Key Vault name (subject to
+  global uniqueness within the vault's DNS suffix).
+- Confirm whether `Contributor` on the RG is acceptable, or whether a custom
+  role (narrower than `Contributor` but covering VM/disk/network/snapshot
+  write access) should be defined instead — a custom role is more precise
+  but adds maintenance overhead or if `Contributor` is deemed acceptable
+  given the RG-level scope bound.
+- Confirm who will do the one-time manual Key Vault secret population, and
+  which specific secrets the current long-lived demo VM uses today (an
+  inventory of this doesn't exist yet in this design).
+
+## 9. Acceptance criteria mapping (DEMO-01.5)
+
+- [x] Azure AD App Registration + federated credential (OIDC) scoped to this
+      repo/workflow only, no client secret generated — §3
+- [x] Role assignment is least-privilege: `Contributor` scoped to the
+      dedicated demo resource group only — §3
+- [x] Runtime secrets delivered via Key Vault + VM managed identity at boot,
+      never baked into the VM image or committed — §4
+- [x] GitHub Environment (`demo`) holds Azure tenant/subscription/client IDs
+      as Environment secrets, not repo secrets or plain workflow YAML — §5
+- [ ] Confirmed neither create nor destroy workflows run on
+      `pull_request`/fork-triggerable events — **pending**, re-check against
+      DEMO-01.3/01.4's actual workflow files once written (§6)
