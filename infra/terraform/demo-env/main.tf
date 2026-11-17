@@ -187,22 +187,22 @@ resource "azapi_resource" "demo_vm" {
         }
       }
 
+      # Both branches must be the exact same shape (same keys, nested
+      # objects included) -- Terraform requires the true/false results of a
+      # conditional expression to unify to one type. Unused fields are left
+      # `null`; azapi omits null attributes when serializing the ARM request
+      # body, so this doesn't change what's actually sent to Azure.
       storageProfile = {
-        osDisk = local.restore_from_snapshot ? {
-          createOption = "Attach"
-          osType       = "Linux"
+        osDisk = {
+          createOption = local.restore_from_snapshot ? "Attach" : "FromImage"
+          osType       = local.restore_from_snapshot ? "Linux" : null
           caching      = "ReadWrite"
+          diskSizeGB   = local.restore_from_snapshot ? null : var.os_disk_size_gb
           managedDisk = {
-            id = azurerm_managed_disk.os[0].id
+            id                 = local.restore_from_snapshot ? azurerm_managed_disk.os[0].id : null
+            storageAccountType = local.restore_from_snapshot ? null : "Standard_LRS"
           }
-          } : {
-          createOption = "FromImage"
-          caching      = "ReadWrite"
-          diskSizeGB   = var.os_disk_size_gb
-          managedDisk = {
-            storageAccountType = "Standard_LRS"
-          }
-          imageReference = {
+          imageReference = local.restore_from_snapshot ? null : {
             publisher = var.base_image.publisher
             offer     = var.base_image.offer
             sku       = var.base_image.sku
