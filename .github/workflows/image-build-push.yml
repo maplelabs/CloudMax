@@ -1,0 +1,123 @@
+# IMG-01: Container image build & publish pipeline
+#
+# Builds a container image for each deployable CloudMax component and
+# publishes it to Azure Container Registry (ACR) whenever code is pushed to
+# `main`. This workflow is intentionally separate from PR CI (CI-01): PR CI
+# only validates pull requests and never gets registry credentials or publish
+# permissions; this workflow only ever runs against code already merged into
+# main (push event, not pull_request).
+#
+# Tagging policy (decided in IMG-01.1):
+#   - sha-<gitsha>  : immutable, always pushed, uniquely identifies this build
+#   - latest        : moving tag, "most recently built" (NOT "known good")
+# There is no release-tag gate and no semantic-version tag here; the single
+# downstream consumer (DEMO-01's ephemeral demo environment) selects images
+# by sha-<gitsha> or by the :verified tag, which DEMO-01.7's health-check
+# workflow promotes separately after this pipeline has already published.
+#
+# Authentication: OIDC (Azure AD federated credential) via azure/login,
+# followed by `az acr login`. No registry password/secret is stored in the
+# repo; only non-secret identity values (client/tenant/subscription ID) are
+# required, plus the target registry name as a repository variable.
+#
+# Required repository configuration (not provisioned by this workflow):
+#   Secrets:
+#     AZURE_CLIENT_ID        - App registration (federated credential) client ID
+#     AZURE_TENANT_ID        - Azure AD tenant ID
+#     AZURE_SUBSCRIPTION_ID  - Azure subscription ID containing the ACR
+#   Variables:
+#     ACR_REGISTRY            - ACR login server, e.g. myregistry.azurecr.io
+#     IMAGE_NAMESPACE          - Optional path prefix within the registry,
+#                                e.g. "cloudmax" (defaults to "cloudmax" if unset)
+
+name: Build and Push Container Images
+
+on:
+  push:
+    branches:
+      - main
+
+# Least-privilege, read-only token plus OIDC id-token for Azure login.
+# No write access to repo contents/packages is requested.
+permissions:
+  contents: read
+  id-token: write
+
+# Avoid overlapping publishes for the same branch racing each other.
+concurrency:
+  group: image-build-push-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-push:
+    name: Build & push ${{ matrix.component.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        component:
+          - name: backend
+            context: ./core/backend
+            dockerfile: ./core/backend/Dockerfile
+          - name: frontend
+            context: .
+            dockerfile: ./core/frontend/Dockerfile
+          - name: code-triage-agent
+            context: ./agents/code-triage
+            dockerfile: ./agents/code-triage/Dockerfile
+          - name: diagnostic-mcp-server
+            context: ./diagnostics/mcp-server
+            dockerfile: ./diagnostics/mcp-server/Dockerfile
+          - name: mcp-nginx
+            context: ./diagnostics/mcp-server
+            dockerfile: ./diagnostics/mcp-server/docker/nginx/Dockerfile.mcp
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve image metadata
+        id: meta
+        run: |
+          SHORT_SHA="${GITHUB_SHA::12}"
+          NAMESPACE="${{ vars.IMAGE_NAMESPACE }}"
+          if [ -z "$NAMESPACE" ]; then
+            NAMESPACE="cloudmax"
+          fi
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "image_repo=${{ vars.ACR_REGISTRY }}/${NAMESPACE}/${{ matrix.component.name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Fail fast if registry is not configured
+        if: ${{ vars.ACR_REGISTRY == '' }}
+        run: |
+          echo "::error::Repository variable ACR_REGISTRY is not set. Configure it before this pipeline can push images."
+          exit 1
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Log in to ACR via az acr login (no stored registry password)
+        run: |
+          ACR_NAME="$(echo "${{ vars.ACR_REGISTRY }}" | cut -d'.' -f1)"
+          az acr login --name "${ACR_NAME}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push ${{ matrix.component.name }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.component.context }}
+          file: ${{ matrix.component.dockerfile }}
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image_repo }}:sha-${{ steps.meta.outputs.short_sha }}
+            ${{ steps.meta.outputs.image_repo }}:latest
+          provenance: false
+
+      - name: Azure logout
+        if: always()
+        run: az logout || true
