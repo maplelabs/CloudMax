@@ -1,0 +1,68 @@
+# DEMO-01.2 follow-up: static validation for the demo-env Terraform module.
+#
+# Runs on every pull request that touches infra/terraform/** and checks that
+# the module is well-formatted and internally consistent (`terraform fmt
+# -check`, `terraform validate`). This is PR CI, not an apply/plan pipeline:
+# it never authenticates to Azure and never touches real infrastructure --
+# `terraform validate` only checks HCL syntax, type consistency, and
+# resource-schema correctness against the provider, using a local-only
+# backend so no remote state/credentials are required.
+#
+# This does NOT run `terraform plan` (which would need Azure credentials and
+# access to real resources/state) -- that belongs in a separate, more
+# privileged workflow once DEMO-01.3/01.4 wire up the actual create/destroy
+# automation.
+
+name: Terraform Validate (demo-env)
+
+on:
+  pull_request:
+    paths:
+      - "infra/terraform/**"
+      - ".github/workflows/terraform-validate.yml"
+
+# Least-privilege, read-only token. No cloud credentials requested or needed.
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-validate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: fmt & validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/terraform/demo-env
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.6.6"
+
+      - name: Terraform fmt (check only, no modifications)
+        run: terraform fmt -check -diff -recursive
+
+      - name: Terraform init (local backend override, no remote state)
+        # Overrides the module's `backend "azurerm" {}` with a local backend
+        # purely so `init`/`validate` can run without real Azure Storage
+        # Account credentials. No state is ever read/written for real here.
+        run: |
+          cat > override.tf <<'EOF'
+          terraform {
+            backend "local" {}
+          }
+          EOF
+          terraform init -backend=true
+
+      - name: Terraform validate
+        run: terraform validate
+
+      - name: Clean up local backend override
+        if: always()
+        run: rm -f override.tf
