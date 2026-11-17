@@ -4,9 +4,14 @@ variable "demo_name" {
 }
 
 variable "location" {
-  description = "Azure region for the demo environment."
+  # Must match the region of the resource group this module provisions into
+  # (and, for the snapshot-restore path, the region of the source snapshots
+  # -- Azure requires a disk Copy to be created in the same region as its
+  # source snapshot). The 'cloudmax' resource group is in eastus2, so that
+  # is the correct default here, not a generic eastus placeholder.
+  description = "Azure region for the demo environment. Must match the resource group's region and, for snapshot-restore creates, the source snapshots' region."
   type        = string
-  default     = "eastus"
+  default     = "eastus2"
 }
 
 variable "resource_group_name" {
