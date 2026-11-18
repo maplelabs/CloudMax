@@ -1,0 +1,213 @@
+# DEMO-01.3: create a CloudMax demo environment on-demand.
+#
+# Manually triggered (workflow_dispatch) -- provisions a demo VM via the
+# DEMO-01.2 Terraform module, restoring from the latest available OS/data
+# snapshot (or a fresh base image on the very first run for a demo lineage --
+# see DEMO-01.1 Sec 3.1/Sec 4), deploys the CloudMax stack, health-checks it,
+# and reports the demo's public URL.
+#
+# Authentication: OIDC (Azure AD federated credential, DEMO-01.5's
+# cloudmax-demo-env-cicd App Registration), scoped to the `demo` GitHub
+# Environment -- no client secret stored. Required-reviewer protection on
+# the `demo` Environment (if configured) gates who can obtain this identity.
+#
+# This workflow intentionally only triggers on workflow_dispatch -- never on
+# pull_request or any fork-triggerable event, since the identity it assumes
+# has Contributor on the `cloudmax` resource group (DEMO-01.5 Sec 3).
+#
+# KNOWN GAP (tracked, not fabricated here): this workflow deploys
+# `docker-compose.prod.yml`, which does not exist in the repo yet. The
+# existing `docker-compose.yml` is a ~15-service local dev stack (includes
+# Langfuse/ClickHouse/MinIO tracing infra) that builds images locally rather
+# than pulling from ACR. Defining the demo's actual service composition
+# (full stack vs. a reduced "core" set: backend, frontend, code-triage-agent,
+# diagnostic-mcp-server, mcp-nginx) is a product/scope decision for whoever
+# owns the demo's requirements, not something to guess at here -- flagged as
+# a blocking follow-up before this workflow can run end-to-end.
+
+name: Create Demo Environment
+
+on:
+  workflow_dispatch:
+    inputs:
+      demo_name:
+        description: "Short identifier for this demo (e.g. 'acme-poc'). Used to name/tag all resources."
+        required: true
+        type: string
+      requested_by:
+        description: "Who this demo is for / who requested it (defaults to the triggering GitHub user)."
+        required: false
+        type: string
+      image_tag:
+        description: "Image tag to deploy. Defaults to :verified (DEMO-01.7). Override to sha-<gitsha> to test an unreleased build."
+        required: false
+        type: string
+        default: "verified"
+
+# Least-privilege: read-only repo access, plus the OIDC id-token needed for
+# Azure login. No write access to repo contents/packages is requested.
+permissions:
+  contents: read
+  id-token: write
+
+# Avoid two concurrent creates for the same demo racing each other and
+# double-provisioning / conflicting Terraform state.
+concurrency:
+  group: demo-create-${{ inputs.demo_name }}
+  cancel-in-progress: false
+
+jobs:
+  create:
+    name: Provision & deploy demo
+    runs-on: ubuntu-latest
+    environment: demo
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve requester
+        id: meta
+        run: |
+          REQUESTED_BY="${{ inputs.requested_by }}"
+          if [ -z "$REQUESTED_BY" ]; then
+            REQUESTED_BY="${{ github.actor }}"
+          fi
+          echo "requested_by=${REQUESTED_BY}" >> "$GITHUB_OUTPUT"
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.6.6"
+
+      - name: Resolve latest snapshots (steady-state) or none (bootstrap)
+        id: snapshots
+        run: |
+          set -euo pipefail
+          RG="${{ vars.DEMO_RESOURCE_GROUP }}"
+          if [ -z "$RG" ]; then
+            echo "::error::Repository variable DEMO_RESOURCE_GROUP is not set."
+            exit 1
+          fi
+
+          # Latest snapshot per disk role, tagged by DEMO-01.4's destroy
+          # workflow as disk-role=os / disk-role=data for this demo_name.
+          # If none exist yet, this is the bootstrap create (DEMO-01.1 Sec 3.1)
+          # and both outputs are left empty -- the Terraform module falls
+          # back to a fresh base image / empty data disk in that case.
+          OS_SNAP=$(az snapshot list -g "$RG" \
+            --query "[?tags.\"demo-name\"=='${{ inputs.demo_name }}' && tags.\"disk-role\"=='os'] | sort_by(@, &timeCreated)[-1].id" \
+            -o tsv)
+          DATA_SNAP=$(az snapshot list -g "$RG" \
+            --query "[?tags.\"demo-name\"=='${{ inputs.demo_name }}' && tags.\"disk-role\"=='data'] | sort_by(@, &timeCreated)[-1].id" \
+            -o tsv)
+
+          echo "os_snapshot_id=${OS_SNAP}" >> "$GITHUB_OUTPUT"
+          echo "data_snapshot_id=${DATA_SNAP}" >> "$GITHUB_OUTPUT"
+
+          if [ -z "$OS_SNAP" ] || [ -z "$DATA_SNAP" ]; then
+            echo "No prior snapshot found for '${{ inputs.demo_name }}' -- bootstrap create (fresh disks)."
+          else
+            echo "Restoring from snapshots: OS=${OS_SNAP} DATA=${DATA_SNAP}"
+          fi
+
+      - name: Terraform init
+        working-directory: infra/terraform/demo-env
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ vars.TF_STATE_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ vars.TF_STATE_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=demo-env/${{ inputs.demo_name }}.tfstate"
+
+      - name: Terraform apply
+        id: apply
+        working-directory: infra/terraform/demo-env
+        env:
+          TF_VAR_demo_name: ${{ inputs.demo_name }}
+          TF_VAR_resource_group_name: ${{ vars.DEMO_RESOURCE_GROUP }}
+          TF_VAR_container_registry_id: ${{ vars.ACR_REGISTRY_ID }}
+          TF_VAR_key_vault_id: ${{ vars.DEMO_KEY_VAULT_ID }}
+          TF_VAR_os_disk_snapshot_id: ${{ steps.snapshots.outputs.os_snapshot_id }}
+          TF_VAR_data_disk_snapshot_id: ${{ steps.snapshots.outputs.data_snapshot_id }}
+          TF_VAR_admin_ssh_public_key: ${{ vars.DEMO_ADMIN_SSH_PUBLIC_KEY }}
+        run: |
+          terraform apply -auto-approve \
+            -var "os_disk_snapshot_id=${TF_VAR_os_disk_snapshot_id:-null}" \
+            -var "data_disk_snapshot_id=${TF_VAR_data_disk_snapshot_id:-null}"
+
+          echo "public_ip=$(terraform output -raw public_ip_address)" >> "$GITHUB_OUTPUT"
+          echo "vm_id=$(terraform output -raw vm_id)" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy application stack to VM (az vm run-command, no SSH)
+        id: deploy
+        run: |
+          set -euo pipefail
+          VM_ID="${{ steps.apply.outputs.vm_id }}"
+
+          # No SSH key is used here -- az vm run-command executes over the
+          # Azure control plane via the VM agent, authenticated by the
+          # caller's own Azure identity (this workflow's OIDC login), not
+          # by any stored SSH credential.
+          #
+          # KNOWN GAP: docker-compose.prod.yml does not exist in this repo
+          # yet (see workflow header comment) -- this step references it as
+          # the target artifact once that file is defined.
+          az vm run-command invoke \
+            --ids "$VM_ID" \
+            --command-id RunShellScript \
+            --scripts '
+              set -euo pipefail
+              az login --identity
+              ACR_NAME=$(echo "${{ vars.ACR_REGISTRY }}" | cut -d"." -f1)
+              az acr login --name "$ACR_NAME"
+              mkdir -p /opt/cloudmax
+              cd /opt/cloudmax
+              # docker-compose.prod.yml is fetched/deployed here once defined
+              # (e.g. via a release artifact or checked-out repo archive).
+              IMAGE_TAG="${{ inputs.image_tag }}" docker compose -f docker-compose.prod.yml pull
+              IMAGE_TAG="${{ inputs.image_tag }}" docker compose -f docker-compose.prod.yml up -d
+            '
+
+      - name: Health check
+        id: health
+        run: |
+          set -euo pipefail
+          PUBLIC_IP="${{ steps.apply.outputs.public_ip }}"
+          ATTEMPTS=20
+          SLEEP_SECONDS=15
+
+          for i in $(seq 1 "$ATTEMPTS"); do
+            if curl -fsS -m 10 "http://${PUBLIC_IP}/health" > /dev/null 2>&1 && \
+               curl -fsSk -m 10 "https://${PUBLIC_IP}/health" > /dev/null 2>&1; then
+              echo "Health check passed on attempt ${i}."
+              exit 0
+            fi
+            echo "Health check attempt ${i}/${ATTEMPTS} failed, retrying in ${SLEEP_SECONDS}s..."
+            sleep "$SLEEP_SECONDS"
+          done
+
+          echo "::error::Health check failed after ${ATTEMPTS} attempts. Demo environment is up but not confirmed healthy."
+          exit 1
+
+      - name: Report demo URL
+        if: success()
+        run: |
+          {
+            echo "## Demo environment ready"
+            echo ""
+            echo "- **Demo name:** ${{ inputs.demo_name }}"
+            echo "- **Requested by:** ${{ steps.meta.outputs.requested_by }}"
+            echo "- **Image tag:** ${{ inputs.image_tag }}"
+            echo "- **URL:** https://${{ steps.apply.outputs.public_ip }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Azure logout
+        if: always()
+        run: az logout || true
