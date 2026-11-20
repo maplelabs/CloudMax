@@ -1,0 +1,84 @@
+# Manually triggered cleanup for a demo environment provisioned by
+# demo-create.yml. Destroys every Azure resource tracked in the given demo's
+# Terraform state (infra/terraform/demo-env, remote backend
+# demo-env/<demo_name>.tfstate in the cloudmaxtfstate storage account).
+#
+# Mirrors demo-create.yml's OIDC auth and backend config exactly so it talks
+# to the same state file. Intentionally workflow_dispatch-only, same
+# reasoning as demo-create.yml (no `environment: demo`, no PR/fork triggers
+# -- see that workflow's header comment for the AADSTS700213 federated-
+# credential subject note).
+
+name: Destroy Demo Environment
+
+on:
+  workflow_dispatch:
+    inputs:
+      demo_name:
+        description: "Short identifier of the demo to destroy (must match the demo_name used at create time)."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: demo-create-${{ inputs.demo_name }}
+  cancel-in-progress: false
+
+jobs:
+  destroy:
+    name: Destroy demo resources
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.6.6"
+
+      - name: Terraform init
+        working-directory: infra/terraform/demo-env
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_USE_OIDC: "true"
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ vars.TF_STATE_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ vars.TF_STATE_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=demo-env/${{ inputs.demo_name }}.tfstate" \
+            -backend-config="use_oidc=true" \
+            -backend-config="client_id=${{ secrets.AZURE_CLIENT_ID }}" \
+            -backend-config="tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
+            -backend-config="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+
+      - name: Terraform destroy
+        working-directory: infra/terraform/demo-env
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_USE_OIDC: "true"
+          TF_VAR_demo_name: ${{ inputs.demo_name }}
+          TF_VAR_resource_group_name: ${{ vars.DEMO_RESOURCE_GROUP }}
+          TF_VAR_container_registry_id: ${{ vars.ACR_REGISTRY_ID }}
+          TF_VAR_key_vault_id: ${{ vars.DEMO_KEY_VAULT_ID }}
+          TF_VAR_admin_ssh_public_key: ${{ vars.DEMO_ADMIN_SSH_PUBLIC_KEY }}
+        run: terraform destroy -auto-approve
+
+      - name: Azure logout
+        if: always()
+        run: az logout || true
