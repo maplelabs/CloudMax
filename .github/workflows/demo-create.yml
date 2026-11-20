@@ -229,6 +229,19 @@ jobs:
               COMMIT_SHA_ARG="$2"
               KEY_VAULT_ID_ARG="$3"
 
+              # terraform apply only waits for the VM *resource* to report
+              # provisioned -- the bootstrap cloud-init (installing docker,
+              # docker-compose-v2, and the Azure CLI, see main.tf osProfile
+              # customData) keeps running in the background after that and
+              # can still be in progress here. Confirmed via a real failed
+              # run: "az: not found" at this exact az login line, because
+              # the Azure CLI install script had not finished yet.
+              # cloud-init status --wait blocks until it is actually done
+              # (no-ops immediately on a steady-state/snapshot-restored VM,
+              # since cloud-init already completed on a prior boot and
+              # carries that state over on the copied disk).
+              cloud-init status --wait
+
               az login --identity
 
               # Fetch the exact commit that triggered this run -- not just
