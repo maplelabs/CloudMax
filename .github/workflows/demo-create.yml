@@ -215,7 +215,16 @@ jobs:
             --command-id RunShellScript \
             --parameters "${DEPLOY_TOKEN}" "${GITHUB_SHA}" "${{ vars.DEMO_KEY_VAULT_ID }}" \
             --scripts '
-              set -euo pipefail
+              # NOTE: this runs via az vm run-command RunShellScript, which
+              # invokes /bin/sh -- Ubuntu defaults /bin/sh to dash, which
+              # does not support "pipefail" (confirmed via a real run:
+              # "script.sh: 4: set: Illegal option -o pipefail"). That
+              # failure meant -e/-u never actually activated, silently
+              # masking every subsequent command failure (missing docker,
+              # missing az CLI) as a reported "success". Use the POSIX-
+              # portable "set -eu" instead -- no pipe (|) in this script
+              # depends on pipefail for correct failure detection.
+              set -eu
               GITHUB_TOKEN_ARG="$1"
               COMMIT_SHA_ARG="$2"
               KEY_VAULT_ID_ARG="$3"
