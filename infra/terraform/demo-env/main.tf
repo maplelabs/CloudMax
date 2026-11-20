@@ -203,6 +203,18 @@ resource "azapi_resource" "demo_vm" {
       # `null`; azapi omits null attributes when serializing the ARM request
       # body, so this doesn't change what's actually sent to Azure.
       storageProfile = {
+        # imageReference belongs directly under storageProfile, not nested
+        # inside storageProfile.osDisk -- confirmed via a real failed apply:
+        # azapi's embedded schema validation rejected
+        # `properties.storageProfile.osDisk.imageReference` outright
+        # ("is not expected here").
+        imageReference = local.restore_from_snapshot ? null : {
+          publisher = var.base_image.publisher
+          offer     = var.base_image.offer
+          sku       = var.base_image.sku
+          version   = var.base_image.version
+        }
+
         osDisk = {
           createOption = local.restore_from_snapshot ? "Attach" : "FromImage"
           osType       = local.restore_from_snapshot ? "Linux" : null
@@ -211,12 +223,6 @@ resource "azapi_resource" "demo_vm" {
           managedDisk = {
             id                 = local.restore_from_snapshot ? azurerm_managed_disk.os[0].id : null
             storageAccountType = local.restore_from_snapshot ? null : "Standard_LRS"
-          }
-          imageReference = local.restore_from_snapshot ? null : {
-            publisher = var.base_image.publisher
-            offer     = var.base_image.offer
-            sku       = var.base_image.sku
-            version   = var.base_image.version
           }
         }
 
@@ -245,7 +251,7 @@ resource "azapi_resource" "demo_vm" {
   # Re-running apply against an already-provisioned demo must not recreate
   # the VM due to image/OS-disk drift (idempotency, per acceptance criteria).
   lifecycle {
-    ignore_changes = [body.properties.storageProfile.osDisk.imageReference]
+    ignore_changes = [body.properties.storageProfile.imageReference]
   }
 
   depends_on = [
