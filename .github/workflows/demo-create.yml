@@ -21,15 +21,19 @@
 # pull_request or any fork-triggerable event, since the identity it assumes
 # has Contributor on the `cloudmax` resource group (DEMO-01.5 Sec 3).
 #
-# KNOWN GAP (tracked, not fabricated here): this workflow deploys
-# `docker-compose.prod.yml`, which does not exist in the repo yet. The
-# existing `docker-compose.yml` is a ~15-service local dev stack (includes
-# Langfuse/ClickHouse/MinIO tracing infra) that builds images locally rather
-# than pulling from ACR. Defining the demo's actual service composition
-# (full stack vs. a reduced "core" set: backend, frontend, code-triage-agent,
-# diagnostic-mcp-server, mcp-nginx) is a product/scope decision for whoever
-# owns the demo's requirements, not something to guess at here -- flagged as
-# a blocking follow-up before this workflow can run end-to-end.
+# Deploys docker-compose.prod.yml (reduced core set: backend, frontend,
+# code-triage-agent, diagnostic-mcp-server, mcp-nginx -- IMG-01's 5 built
+# images -- plus postgres/redis/opa as plain off-the-shelf containers the
+# backend/mcp-nginx need to run). The repo (containing that compose file and
+# the policies/certs directories it mounts) is fetched onto the VM via an
+# authenticated `git clone` using a short-lived GITHUB_TOKEN passed as a
+# run-command parameter (never embedded in the script text or logged) --
+# still no SSH key or long-lived PAT involved.
+#
+# POSTGRES_PASSWORD / REDIS_QUEUE_AUTH are fetched from the cloudmax-kv Key
+# Vault using the VM's own system-assigned managed identity (DEMO-01.2,
+# DEMO-01.5 Sec 4) -- never passed through GitHub Actions or stored on disk
+# outside the VM's own runtime environment.
 
 name: Create Demo Environment
 
@@ -153,32 +157,53 @@ jobs:
 
       - name: Deploy application stack to VM (az vm run-command, no SSH)
         id: deploy
+        env:
+          DEPLOY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           VM_ID="${{ steps.apply.outputs.vm_id }}"
 
-          # No SSH key is used here -- az vm run-command executes over the
-          # Azure control plane via the VM agent, authenticated by the
-          # caller's own Azure identity (this workflow's OIDC login), not
-          # by any stored SSH credential.
-          #
-          # KNOWN GAP: docker-compose.prod.yml does not exist in this repo
-          # yet (see workflow header comment) -- this step references it as
-          # the target artifact once that file is defined.
+          # No SSH key or long-lived PAT is used here -- az vm run-command
+          # executes over the Azure control plane via the VM agent,
+          # authenticated by the caller's own Azure identity (this
+          # workflow's OIDC login). The only credential passed to the VM is
+          # this job's own short-lived GITHUB_TOKEN (expires when the job
+          # ends), supplied as a run-command *parameter* (not interpolated
+          # into the script text), so it never appears in command history
+          # or Azure Activity Log entries for this operation.
           az vm run-command invoke \
             --ids "$VM_ID" \
             --command-id RunShellScript \
+            --parameters "${DEPLOY_TOKEN}" "${GITHUB_SHA}" "${{ vars.DEMO_KEY_VAULT_ID }}" \
             --scripts '
               set -euo pipefail
+              GITHUB_TOKEN_ARG="$1"
+              COMMIT_SHA_ARG="$2"
+              KEY_VAULT_ID_ARG="$3"
+
               az login --identity
+
+              # Fetch the exact commit that triggered this run -- not just
+              # whatever is on main at deploy time -- using the short-lived
+              # token above, then discard the clone directory credential.
+              rm -rf /opt/cloudmax
+              git clone --quiet "https://x-access-token:${GITHUB_TOKEN_ARG}@github.com/maplelabs/CloudMax.git" /opt/cloudmax
+              cd /opt/cloudmax
+              git checkout --quiet "${COMMIT_SHA_ARG}"
+
               ACR_NAME=$(echo "${{ vars.ACR_REGISTRY }}" | cut -d"." -f1)
               az acr login --name "$ACR_NAME"
-              mkdir -p /opt/cloudmax
-              cd /opt/cloudmax
-              # docker-compose.prod.yml is fetched/deployed here once defined
-              # (e.g. via a release artifact or checked-out repo archive).
-              IMAGE_TAG="${{ inputs.image_tag }}" docker compose -f docker-compose.prod.yml pull
-              IMAGE_TAG="${{ inputs.image_tag }}" docker compose -f docker-compose.prod.yml up -d
+
+              # Key Vault name is the last path segment of the resource ID.
+              KV_NAME=$(basename "${KEY_VAULT_ID_ARG}")
+              export POSTGRES_PASSWORD=$(az keyvault secret show --vault-name "$KV_NAME" --name postgres-password --query value -o tsv)
+              export REDIS_QUEUE_AUTH=$(az keyvault secret show --vault-name "$KV_NAME" --name redis-queue-auth --query value -o tsv)
+              export ACR_REGISTRY="${{ vars.ACR_REGISTRY }}"
+              export IMAGE_NAMESPACE="${{ vars.IMAGE_NAMESPACE }}"
+              export IMAGE_TAG="${{ inputs.image_tag }}"
+
+              docker compose -f docker-compose.prod.yml pull
+              docker compose -f docker-compose.prod.yml up -d
             '
 
       - name: Health check

@@ -1,0 +1,213 @@
+# docker-compose.prod.yml — CloudMax ephemeral demo environment (DEMO-01)
+#
+# Used by DEMO-01.3's demo-create.yml to deploy a reduced, demo-sized stack
+# on the Terraform-provisioned VM. Unlike the local-dev docker-compose.yml,
+# this file:
+#   - PULLS pre-built images from ACR (IMG-01's 5 components) instead of
+#     building them locally — no build context, no Dockerfiles referenced.
+#   - OMITS the observability stack entirely (langfuse-web, langfuse-worker,
+#     clickhouse, minio, redis-langfuse) — not required for demo purposes
+#     and adds meaningful VM sizing/cost (decision: reduced core set).
+#   - Includes postgres, redis, and opa as plain off-the-shelf containers
+#     (not built/published by IMG-01 — these are standard public images),
+#     since the backend cannot start without a database and queue, and
+#     mcp-nginx/mcp-server depend on opa for authorization.
+#
+# Image tag selection: all 5 ACR-built services use ${IMAGE_TAG:-verified},
+# matching demo-create.yml's `image_tag` input (defaults to the :verified
+# tag promoted by DEMO-01.7's health-check gate; can be overridden to a
+# specific sha-<gitsha> to test an unreleased build).
+#
+# Secrets: POSTGRES_PASSWORD and REDIS_QUEUE_AUTH are expected as pre-set
+# environment variables (not hardcoded here) — demo-create.yml's deploy step
+# fetches these from the cloudmax-kv Key Vault via the VM's managed identity
+# and exports them before `docker compose up` runs, per DEMO-01.5 §4 (no
+# secret baked into image, disk, or repo).
+
+services:
+  # One-time DB migration, runs and exits before backend/triager/etc. start.
+  migrate:
+    image: ${ACR_REGISTRY}/${IMAGE_NAMESPACE:-cloudmax}/backend:${IMAGE_TAG:-verified}
+    container_name: cloudmax-migrate
+    environment:
+      MODE: migrate
+      CONFIG_DB: "true"
+      DATABASE_URL: postgresql+asyncpg://otelu:${POSTGRES_PASSWORD}@postgres:5432/sreops
+      POSTGRES_CHECKPOINTER_CONN_STRING: postgresql://otelu:${POSTGRES_PASSWORD}@postgres:5432/checkpoint?sslmode=disable
+      REDIS_QUEUE_HOST: redis
+      REDIS_QUEUE_PORT: "6379"
+      REDIS_QUEUE_AUTH: ${REDIS_QUEUE_AUTH}
+      REDIS_QUEUE_DB: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - cloudmax-network
+    restart: "no"
+
+  backend:
+    image: ${ACR_REGISTRY}/${IMAGE_NAMESPACE:-cloudmax}/backend:${IMAGE_TAG:-verified}
+    container_name: cloudmax-backend
+    environment:
+      CONFIG_DB: "true"
+      DATABASE_URL: postgresql+asyncpg://otelu:${POSTGRES_PASSWORD}@postgres:5432/sreops
+      POSTGRES_CHECKPOINTER_CONN_STRING: postgresql://otelu:${POSTGRES_PASSWORD}@postgres:5432/checkpoint?sslmode=disable
+      REDIS_QUEUE_HOST: redis
+      REDIS_QUEUE_PORT: "6379"
+      REDIS_QUEUE_AUTH: ${REDIS_QUEUE_AUTH}
+      REDIS_QUEUE_DB: "1"
+      LANGFUSE_TRACING: "false"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - cloudmax-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+  frontend:
+    image: ${ACR_REGISTRY}/${IMAGE_NAMESPACE:-cloudmax}/frontend:${IMAGE_TAG:-verified}
+    container_name: cloudmax-frontend
+    ports:
+      - "443:443"
+      - "80:80"
+    environment:
+      - BACKEND_URL=http://backend:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - cloudmax-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-k", "https://127.0.0.1:443/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+  opa:
+    image: openpolicyagent/opa:0.70.0
+    container_name: cloudmax-opa
+    command:
+      - "run"
+      - "--server"
+      - "--addr=0.0.0.0:8181"
+      - "--log-level=info"
+      - "/policies/authz.rego"
+    volumes:
+      - ./diagnostics/mcp-server/policies:/policies:ro
+    networks:
+      - cloudmax-network
+    restart: unless-stopped
+
+  mcp-server:
+    image: ${ACR_REGISTRY}/${IMAGE_NAMESPACE:-cloudmax}/diagnostic-mcp-server:${IMAGE_TAG:-verified}
+    container_name: cloudmax-mcp-server
+    environment:
+      - OPA_URL=http://opa:8181
+      - SKIP_KAFKA_CHECK=true
+      - MTLS_ENABLED=${MCP_MTLS_ENABLED:-false}
+    depends_on:
+      opa:
+        condition: service_started
+    networks:
+      - cloudmax-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s = socket.socket(); s.connect(('localhost', 8000)); s.close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+  mcp-nginx:
+    image: ${ACR_REGISTRY}/${IMAGE_NAMESPACE:-cloudmax}/mcp-nginx:${IMAGE_TAG:-verified}
+    container_name: cloudmax-mcp-nginx
+    ports:
+      - "8443:8443"
+    volumes:
+      - ./diagnostics/mcp-server/certs:/etc/nginx/certs:ro
+    environment:
+      - MTLS_ENABLED=${MCP_MTLS_ENABLED:-false}
+    depends_on:
+      mcp-server:
+        condition: service_healthy
+      opa:
+        condition: service_started
+    networks:
+      - cloudmax-network
+    healthcheck:
+      test: ["CMD", "sh", "-c", "if [ \"$$MTLS_ENABLED\" = \"true\" ]; then curl -f -k https://127.0.0.1:8443/health; else curl -f http://127.0.0.1:8443/health; fi"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+  code-triage-agent:
+    image: ${ACR_REGISTRY}/${IMAGE_NAMESPACE:-cloudmax}/code-triage-agent:${IMAGE_TAG:-verified}
+    container_name: cloudmax-code-triage-agent
+    command: uvicorn src.a2a_app:app --host 0.0.0.0 --port 8002
+    networks:
+      - cloudmax-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: cloudmax-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: otelu
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U otelu -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    networks:
+      - cloudmax-network
+
+  redis:
+    image: docker.io/redis:7
+    container_name: cloudmax-redis
+    restart: always
+    command: >
+      redis-server --requirepass ${REDIS_QUEUE_AUTH} --port 6379
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6379", "-a", "${REDIS_QUEUE_AUTH}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    networks:
+      - cloudmax-network
+
+networks:
+  cloudmax-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
