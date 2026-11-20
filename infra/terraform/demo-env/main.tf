@@ -184,6 +184,29 @@ resource "azapi_resource" "demo_vm" {
       osProfile = local.restore_from_snapshot ? null : {
         computerName  = "${local.name_prefix}-vm"
         adminUsername = var.admin_username
+        # Only applies to the bootstrap (FromImage) path -- a future
+        # snapshot-restored VM already has these baked in from this same
+        # cloud-init having run once during the original bootstrap.
+        #
+        # Confirmed via a real deployed VM that the stock marketplace Ubuntu
+        # image has neither Docker nor the Azure CLI preinstalled (the
+        # deploy workflow's `docker compose ...` / `az login --identity`
+        # commands silently no-op'd as "command not found", masked by a
+        # separate bug where `set -euo pipefail` failed under dash and so
+        # never actually stopped the script on error -- see demo-create.yml's
+        # deploy step fix for that part).
+        customData = base64encode(<<-CLOUDINIT
+          #cloud-config
+          package_update: true
+          packages:
+            - docker.io
+            - docker-compose-v2
+            - git
+          runcmd:
+            - systemctl enable --now docker
+            - curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+          CLOUDINIT
+        )
         linuxConfiguration = {
           disablePasswordAuthentication = true
           ssh = {
