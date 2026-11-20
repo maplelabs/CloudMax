@@ -36,6 +36,11 @@ on:
   push:
     branches:
       - main
+  # Manual trigger for on-demand testing/re-runs. Same trust level as the
+  # push trigger above -- only someone with write access to the repo can
+  # invoke this (it is not fork/PR-triggerable), so this does not change
+  # IMG-01.1's trigger-policy decision (push to main, no untrusted access).
+  workflow_dispatch:
 
 # Least-privilege, read-only token plus OIDC id-token for Azure login.
 # No write access to repo contents/packages is requested.
