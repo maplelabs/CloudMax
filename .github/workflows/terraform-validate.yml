@@ -20,6 +20,9 @@ on:
     paths:
       - "infra/terraform/**"
       - ".github/workflows/terraform-validate.yml"
+  # Manual trigger for on-demand validation runs outside a PR. Needs no
+  # cloud credentials (see job below), so this carries no additional risk.
+  workflow_dispatch:
 
 # Least-privilege, read-only token. No cloud credentials requested or needed.
 permissions:
