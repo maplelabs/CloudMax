@@ -23,9 +23,18 @@ variable "resource_group_name" {
 # --- Sizing (parameterized per DEMO-01.2 acceptance criteria) ---------------
 
 variable "vm_size" {
-  description = "Azure VM size for the demo host."
+  description = <<-EOT
+    Azure VM size for the demo host. Defaults to Standard_B2s (Standard BS
+    Family) because the subscription currently has 0 quota for the DSv5/DASv5
+    families (confirmed via a real failed apply: "exceeding approved
+    standardDSv5Family Cores quota ... Current Limit: 0") -- `az vm
+    list-usage --location eastus2` showed 10 cores available in Standard BS
+    Family at the time this default was set. Revisit if/when a quota
+    increase is approved (see DEMO-01.1's cost model section) or a different
+    region/family is preferred.
+  EOT
   type        = string
-  default     = "Standard_D2s_v5"
+  default     = "Standard_B2s"
 }
 
 variable "os_disk_size_gb" {
