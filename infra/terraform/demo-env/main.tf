@@ -251,10 +251,14 @@ resource "azurerm_role_assignment" "acr_pull" {
   principal_id         = azapi_resource.demo_vm.identity[0].principal_id
 }
 
-resource "azurerm_key_vault_access_policy" "demo_vm" {
-  key_vault_id = var.key_vault_id
-  tenant_id    = azapi_resource.demo_vm.identity[0].tenant_id
-  object_id    = azapi_resource.demo_vm.identity[0].principal_id
-
-  secret_permissions = ["Get", "List"]
+# cloudmax-kv uses Azure RBAC authorization (not the legacy Access Policy
+# model) -- Azure rejects azurerm_key_vault_access_policy writes against an
+# RBAC-mode vault outright, so the VM's managed identity is granted via a
+# role assignment instead. "Key Vault Secrets User" is the least-privilege
+# built-in role covering read-only secret Get/List, matching the original
+# Get/List-only intent.
+resource "azurerm_role_assignment" "demo_vm_kv_secrets" {
+  scope                = var.key_vault_id
+  role_definition_name = "Key Vault Secrets User"
+  principal_id         = azapi_resource.demo_vm.identity[0].principal_id
 }
