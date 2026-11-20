@@ -137,19 +137,43 @@ jobs:
             echo "Restoring from snapshots: OS=${OS_SNAP} DATA=${DATA_SNAP}"
           fi
 
+      # The azurerm backend/provider default to reading Azure CLI's cached
+      # login (use_cli=true), but CLI-based auth only supports interactive
+      # User accounts, not Service Principals -- which is what azure/login's
+      # OIDC session actually is (confirmed via a real failed run: "Error
+      # building ARM Config: Authenticating using the Azure CLI is only
+      # supported as a User (not a Service Principal)"). ARM_USE_OIDC=true
+      # makes both the backend (state storage) and provider authenticate
+      # directly via GitHub's OIDC token instead, reusing the
+      # ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN env vars GitHub auto-populates for
+      # any job with `permissions: id-token: write` (already set above) --
+      # no separate token-fetch step needed.
       - name: Terraform init
         working-directory: infra/terraform/demo-env
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_USE_OIDC: "true"
         run: |
           terraform init \
             -backend-config="resource_group_name=${{ vars.TF_STATE_RESOURCE_GROUP }}" \
             -backend-config="storage_account_name=${{ vars.TF_STATE_STORAGE_ACCOUNT }}" \
             -backend-config="container_name=tfstate" \
-            -backend-config="key=demo-env/${{ inputs.demo_name }}.tfstate"
+            -backend-config="key=demo-env/${{ inputs.demo_name }}.tfstate" \
+            -backend-config="use_oidc=true" \
+            -backend-config="client_id=${{ secrets.AZURE_CLIENT_ID }}" \
+            -backend-config="tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
+            -backend-config="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}"
 
       - name: Terraform apply
         id: apply
         working-directory: infra/terraform/demo-env
         env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_USE_OIDC: "true"
           TF_VAR_demo_name: ${{ inputs.demo_name }}
           TF_VAR_resource_group_name: ${{ vars.DEMO_RESOURCE_GROUP }}
           TF_VAR_container_registry_id: ${{ vars.ACR_REGISTRY_ID }}
