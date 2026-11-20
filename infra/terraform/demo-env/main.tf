@@ -21,7 +21,17 @@ locals {
 
   # Bootstrap vs. steady-state: restore from snapshot if one was supplied,
   # otherwise fall back to a fresh disk (DEMO-01.1 §3.1).
-  restore_from_snapshot = var.os_disk_snapshot_id != null && var.data_disk_snapshot_id != null
+  #
+  # Checks for both null AND empty string: callers that supply this value
+  # via a CI step output (e.g. demo-create.yml's snapshot-lookup step) get
+  # an empty string "", not an absent/null value, when no prior snapshot
+  # exists -- confirmed via a real failed apply where "" was treated as
+  # present, causing Terraform to attempt Copy from a null source resource
+  # ID ("LinkedInvalidPropertyId: Property id 'null' ... is invalid").
+  restore_from_snapshot = (
+    var.os_disk_snapshot_id != null && var.os_disk_snapshot_id != "" &&
+    var.data_disk_snapshot_id != null && var.data_disk_snapshot_id != ""
+  )
 }
 
 data "azurerm_resource_group" "demo" {

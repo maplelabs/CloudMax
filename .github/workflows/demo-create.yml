@@ -182,9 +182,14 @@ jobs:
           TF_VAR_data_disk_snapshot_id: ${{ steps.snapshots.outputs.data_snapshot_id }}
           TF_VAR_admin_ssh_public_key: ${{ vars.DEMO_ADMIN_SSH_PUBLIC_KEY }}
         run: |
-          terraform apply -auto-approve \
-            -var "os_disk_snapshot_id=${TF_VAR_os_disk_snapshot_id:-null}" \
-            -var "data_disk_snapshot_id=${TF_VAR_data_disk_snapshot_id:-null}"
+          # TF_VAR_os_disk_snapshot_id / TF_VAR_data_disk_snapshot_id (set in
+          # this step's env above) are picked up by Terraform automatically --
+          # no -var flags needed. An empty string (no prior snapshot found)
+          # is now handled correctly by main.tf's restore_from_snapshot check
+          # (treats "" the same as null), rather than relying on a shell
+          # ${VAR:-null} substitution that passed the literal text "null"
+          # instead of an actual null value.
+          terraform apply -auto-approve
 
           echo "public_ip=$(terraform output -raw public_ip_address)" >> "$GITHUB_OUTPUT"
           echo "vm_id=$(terraform output -raw vm_id)" >> "$GITHUB_OUTPUT"
