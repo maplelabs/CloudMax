@@ -243,6 +243,17 @@ resource "azapi_resource" "demo_vm" {
           osType       = local.restore_from_snapshot ? "Linux" : null
           caching      = "ReadWrite"
           diskSizeGB   = local.restore_from_snapshot ? null : var.os_disk_size_gb
+          # Bootstrap (FromImage): the OS disk is provisioned implicitly by
+          # the VM itself, not tracked as its own Terraform resource -- ARM's
+          # default deleteOption is "Detach", which orphans the disk (left
+          # it behind, still billing, costing money) when the VM is deleted.
+          # deleteOption = "Delete" makes VM deletion cascade-delete it.
+          # Steady-state (Attach): the disk IS a separate tracked resource
+          # (azurerm_managed_disk.os[0]) that `terraform destroy` deletes on
+          # its own -- "Delete" here would race/conflict with that (VM
+          # delete removes the disk first, then Terraform's own disk-delete
+          # 404s), so this path keeps the "Detach" default instead.
+          deleteOption = local.restore_from_snapshot ? null : "Delete"
           managedDisk = {
             id                 = local.restore_from_snapshot ? azurerm_managed_disk.os[0].id : null
             storageAccountType = local.restore_from_snapshot ? null : "Standard_LRS"
