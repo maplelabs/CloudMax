@@ -6,10 +6,16 @@
 # see DEMO-01.1 Sec 3.1/Sec 4), deploys the CloudMax stack, health-checks it,
 # and reports the demo's public URL.
 #
-# Authentication: OIDC (Azure AD federated credential, DEMO-01.5's
-# cloudmax-demo-env-cicd App Registration), scoped to the `demo` GitHub
-# Environment -- no client secret stored. Required-reviewer protection on
-# the `demo` Environment (if configured) gates who can obtain this identity.
+# Authentication: OIDC (Azure AD federated credential, the
+# CloudMaX-App-GitHub-Int App Registration -- DEMO-01.5's as-built identity,
+# which also handles IMG-01's AcrPush) -- no client secret stored.
+#
+# KNOWN GAP (see DEMO-01.5 doc, Sec 5): secrets are currently repo-level, not
+# Environment-level -- the `environment: demo` reference below requires that
+# Environment to actually be created in repo settings (with required
+# reviewers) before it provides any reviewer-gating. Until then, this
+# workflow runs with no reviewer gate beyond who has workflow_dispatch
+# access to the repo.
 #
 # This workflow intentionally only triggers on workflow_dispatch -- never on
 # pull_request or any fork-triggerable event, since the identity it assumes
