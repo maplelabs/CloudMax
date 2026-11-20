@@ -10,12 +10,23 @@
 # CloudMaX-App-GitHub-Int App Registration -- DEMO-01.5's as-built identity,
 # which also handles IMG-01's AcrPush) -- no client secret stored.
 #
-# KNOWN GAP (see DEMO-01.5 doc, Sec 5): secrets are currently repo-level, not
-# Environment-level -- the `environment: demo` reference below requires that
-# Environment to actually be created in repo settings (with required
-# reviewers) before it provides any reviewer-gating. Until then, this
-# workflow runs with no reviewer gate beyond who has workflow_dispatch
-# access to the repo.
+# KNOWN GAP (see DEMO-01.5 doc, Sec 5): secrets are repo-level, not
+# Environment-level. A `demo` GitHub Environment was created but is left
+# ungated (no required reviewers) for now, and is deliberately NOT
+# referenced by this job (see note below) -- so there is currently no
+# reviewer gate beyond who has workflow_dispatch access to the repo.
+#
+# NOTE: this job intentionally does NOT set `environment: demo`. GitHub's
+# OIDC token subject claim changes to `repo:<org>/<repo>:environment:<name>`
+# for any job that targets an Environment -- overriding the branch-ref
+# subject (`repo:...:ref:refs/heads/main`) that CloudMaX-App-GitHub-Int's
+# federated credential is actually configured for, regardless of what
+# triggered the run. Setting `environment: demo` here caused a real
+# AADSTS700213 failure ("No matching federated identity record") when
+# tested. If/when the `demo` Environment gets required-reviewer protection
+# (making it worth referencing), a matching federated credential subject
+# (`repo:maplelabs/CloudMax:environment:demo`) must be added to the App
+# Registration first, or this job will fail Azure login again.
 #
 # This workflow intentionally only triggers on workflow_dispatch -- never on
 # pull_request or any fork-triggerable event, since the identity it assumes
@@ -70,7 +81,6 @@ jobs:
   create:
     name: Provision & deploy demo
     runs-on: ubuntu-latest
-    environment: demo
     steps:
       - name: Checkout
         uses: actions/checkout@v4
