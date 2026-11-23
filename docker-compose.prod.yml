@@ -178,6 +178,10 @@ services:
       POSTGRES_DB: postgres
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    configs:
+      - source: postgres-init-sql
+        target: /docker-entrypoint-initdb.d/00-init.sql
+        mode: 444
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U otelu -d postgres"]
       interval: 5s
@@ -211,3 +215,17 @@ networks:
 volumes:
   postgres_data:
   redis_data:
+
+configs:
+  postgres-init-sql:
+    content: |
+      -- Initialize databases needed by the backend (migrate/backend both
+      -- connect to sreops; the LangGraph checkpointer connects to
+      -- checkpoint). Mirrors docker-compose.yml's local-dev init, minus
+      -- the langfuse database (observability stack is not deployed here).
+      CREATE DATABASE checkpoint;
+      CREATE DATABASE sreops;
+
+      -- Connect to sreops database and setup pgvector
+      \c sreops;
+      CREATE EXTENSION IF NOT EXISTS vector;
