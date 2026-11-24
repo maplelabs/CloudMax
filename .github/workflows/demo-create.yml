@@ -367,9 +367,20 @@ jobs:
               # override.yml is picked up automatically by `docker compose`
               # alongside docker-compose.yml (no -f flags needed) and only
               # remaps that one port.
+              #
+              # The "!override" merge tag on the ports key is required --
+              # confirmed via a real failed deploy where a plain ports list
+              # here only ADDED the 8090:80 mapping alongside the upstream
+              # file own 80:80 one (Compose merges ports lists across files
+              # by unique entry, it does not replace them), so hotel-nginx
+              # still also tried to bind host port 80 and collided with
+              # cloudmax-frontend ("port is already allocated"). !override
+              # forces this override file version to fully replace the base
+              # ports list instead of merging into it (Compose Spec,
+              # supported by this VM's Compose 2.40.3).
               echo "services:" > docker-compose.override.yml
               echo "  nginx:" >> docker-compose.override.yml
-              echo "    ports:" >> docker-compose.override.yml
+              echo "    ports: !override" >> docker-compose.override.yml
               echo "      - \"8090:80\"" >> docker-compose.override.yml
 
               export COMPOSE_PROJECT_NAME=hotel
