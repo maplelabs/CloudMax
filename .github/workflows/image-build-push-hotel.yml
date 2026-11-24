@@ -67,9 +67,11 @@ jobs:
             path: src/backend/services/invoice-service
           - name: booking-post-processing-service
             path: src/backend/services/booking-post-processing-service
+    env:
+      FAULT_INJECTOR_READ_TOKEN: ${{ secrets.FAULT_INJECTOR_READ_TOKEN }}
     steps:
       - name: Fail fast if FAULT_INJECTOR_READ_TOKEN is not configured
-        if: ${{ secrets.FAULT_INJECTOR_READ_TOKEN == '' }}
+        if: ${{ env.FAULT_INJECTOR_READ_TOKEN == '' }}
         run: |
           echo "::error::Repository secret FAULT_INJECTOR_READ_TOKEN is not set. Add a read-only, fine-grained GitHub PAT scoped to maplelabs/fault-injector before this pipeline can check it out."
           exit 1
