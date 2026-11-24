@@ -143,10 +143,6 @@ on:
         description: "Short identifier for this demo (e.g. 'acme-poc'). Used to name/tag all resources."
         required: true
         type: string
-      requested_by:
-        description: "Who this demo is for / who requested it (defaults to the triggering GitHub user)."
-        required: false
-        type: string
       deploy_hotel_reservation_app:
         description: "Also deploy the fault-injector hotel-reservation-application target app alongside CloudMax (from pre-built ACR images, see image-build-push-hotel.yml), networked so both stacks can reach each other. Defaults to true -- set false to skip it and deploy CloudMax alone."
         required: false
@@ -177,15 +173,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Resolve requester
-        id: meta
-        run: |
-          REQUESTED_BY="${{ inputs.requested_by }}"
-          if [ -z "$REQUESTED_BY" ]; then
-            REQUESTED_BY="${{ github.actor }}"
-          fi
-          echo "requested_by=${REQUESTED_BY}" >> "$GITHUB_OUTPUT"
 
       - name: Azure login (OIDC)
         uses: azure/login@v2
@@ -698,7 +685,7 @@ jobs:
             echo "## Demo environment ready"
             echo ""
             echo "- **Demo name:** ${{ inputs.demo_name }}"
-            echo "- **Requested by:** ${{ steps.meta.outputs.requested_by }}"
+            echo "- **Requested by:** ${{ github.actor }}"
             echo "- **URL:** https://${{ steps.apply.outputs.public_ip }}"
           } >> "$GITHUB_STEP_SUMMARY"
 
