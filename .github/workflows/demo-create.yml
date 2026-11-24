@@ -46,8 +46,8 @@
 # DEMO-01.5 Sec 4) -- never passed through GitHub Actions or stored on disk
 # outside the VM's own runtime environment.
 #
-# Optional: fault-injector's hotel-reservation-application (deploy_hotel_reservation_app
-# input, default false -- opt-in given its resource footprint) -- a multi-service
+# Default-on: fault-injector's hotel-reservation-application (deploy_hotel_reservation_app
+# input, default true -- set false to deploy CloudMax alone) -- a multi-service
 # target app (5 microservices, Postgres, Elasticsearch, Kafka+Zookeeper, plus a
 # full observability stack: Jaeger, Prometheus, Grafana, Loki/Promtail, cAdvisor,
 # and two MCP servers purpose-built for AI-SRE-Ops integration: grafana-mcp-server
@@ -73,12 +73,21 @@
 # hotel-grafana-mcp/hotel-jaeger-mcp/etc., and the hotel stack's services
 # can resolve cloudmax-backend/cloudmax-mcp-server/etc.).
 #
-# Sizing: the subscription's Standard BS Family quota (see variables.tf's
-# vm_size comment) caps how large a VM this can request. The default
-# Standard_B2s (2 vCPU/4GB) is nowhere near enough for the hotel stack's ~20
-# extra containers on top of CloudMax's own 8 -- override via this workflow's
-# vm_size input (e.g. Standard_B4ms, 4 vCPU/16GB) whenever
-# deploy_hotel_reservation_app is set.
+# Sizing: the Terraform module's vm_size default is Standard_F8s_v2 (8 vCPU /
+# 16 GiB, see variables.tf), sized for CloudMax plus the hotel stack's ~20
+# extra containers, since deploy_hotel_reservation_app now defaults to true.
+# Override this workflow's vm_size input to a smaller size (e.g. Standard_B2s)
+# for CloudMax-only demos (deploy_hotel_reservation_app=false).
+#
+# Public IP: the demo VM binds a pre-reserved, fixed static IP ("cloudmax-vm-ip",
+# 135.232.101.211 at the time this was set) by default -- see
+# variables.tf's public_ip_name comment. This is required because the hotel
+# app's frontend has that address hardcoded at build time as its backend API
+# URL; it is never created or destroyed by Terraform (referenced via a data
+# source only), so demo-destroy.yml's `terraform destroy` never deletes it.
+# This also means only one demo can use the default configuration at a time
+# (one public IP, one NIC); override TF_VAR_public_ip_name to "" (or a
+# different pre-existing IP name) to run additional demos concurrently.
 
 name: Create Demo Environment
 
@@ -99,12 +108,12 @@ on:
         type: string
         default: "verified"
       deploy_hotel_reservation_app:
-        description: "Also clone maplelabs/fault-injector and deploy its hotel-reservation-application target app alongside CloudMax, networked so both stacks can reach each other."
+        description: "Also clone maplelabs/fault-injector and deploy its hotel-reservation-application target app alongside CloudMax, networked so both stacks can reach each other. Defaults to true -- set false to skip it and deploy CloudMax alone."
         required: false
         type: boolean
-        default: false
+        default: true
       vm_size:
-        description: "Azure VM size override. Leave blank to use the Terraform default (Standard_B2s). Recommended: Standard_B4ms+ when deploy_hotel_reservation_app is true (quota-permitting -- see variables.tf)."
+        description: "Azure VM size override. Leave blank to use the Terraform default (Standard_F8s_v2, 8 vCPU/16 GiB -- sized for CloudMax + the hotel app, which is deployed by default). Override to a smaller size (e.g. Standard_B2s) when deploy_hotel_reservation_app is false."
         required: false
         type: string
         default: ""
@@ -235,7 +244,7 @@ jobs:
           # instead of an actual null value.
           #
           # vm_size: only pass -var when the input is non-empty, so an unset
-          # input falls through to the module's own default (Standard_B2s)
+          # input falls through to the module's own default (Standard_F8s_v2)
           # instead of Terraform erroring on an explicit empty string.
           if [ -n "${{ inputs.vm_size }}" ]; then
             terraform apply -auto-approve -var="vm_size=${{ inputs.vm_size }}"

@@ -40,13 +40,39 @@ data "azurerm_resource_group" "demo" {
 
 # --- Networking --------------------------------------------------------------
 
+locals {
+  use_existing_public_ip = var.public_ip_name != null && var.public_ip_name != ""
+}
+
+# Referencing this via a data source (read-only) rather than importing it as
+# a Terraform-managed resource is deliberate: it is never created or
+# destroyed by this module, so `terraform destroy` can never delete it, and
+# it can be safely reused across repeated create/destroy cycles of the same
+# (or a different) demo_name -- see variables.tf's public_ip_name comment
+# for why a fixed, pre-reserved address is required here (fault-injector's
+# hotel-reservation-application frontend hardcodes it at build time).
+data "azurerm_public_ip" "existing" {
+  count               = local.use_existing_public_ip ? 1 : 0
+  name                = var.public_ip_name
+  resource_group_name = data.azurerm_resource_group.demo.name
+}
+
+# Falls back to the original per-demo managed IP when public_ip_name is unset
+# (empty string) -- e.g. to run more than one demo concurrently, since one
+# public IP can only be attached to one NIC at a time.
 resource "azurerm_public_ip" "demo" {
+  count               = local.use_existing_public_ip ? 0 : 1
   name                = "${local.name_prefix}-pip"
   resource_group_name = data.azurerm_resource_group.demo.name
   location            = var.location
   allocation_method   = "Static"
   sku                 = "Standard"
   tags                = local.common_tags
+}
+
+locals {
+  public_ip_id      = local.use_existing_public_ip ? data.azurerm_public_ip.existing[0].id : azurerm_public_ip.demo[0].id
+  public_ip_address = local.use_existing_public_ip ? data.azurerm_public_ip.existing[0].ip_address : azurerm_public_ip.demo[0].ip_address
 }
 
 resource "azurerm_network_security_group" "demo" {
@@ -129,7 +155,7 @@ resource "azurerm_network_interface" "demo" {
     name                          = "internal"
     subnet_id                     = azurerm_subnet.demo.id
     private_ip_address_allocation = "Dynamic"
-    public_ip_address_id          = azurerm_public_ip.demo.id
+    public_ip_address_id          = local.public_ip_id
   }
 }
 
