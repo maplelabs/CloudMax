@@ -628,7 +628,7 @@ jobs:
               # Only recreates grafana-mcp-server (the sole service whose
               # env actually changed) -- docker compose still needs the
               # full file + all referenced vars to interpolate correctly,
-              # but it diffs each service's resolved config against what is
+              # but it diffs each service'\''s resolved config against what is
               # already running and leaves everything else untouched.
               docker compose up -d grafana-mcp-server
               fi
@@ -642,7 +642,7 @@ jobs:
               # /etc/grafana/provisioning/alerting. Grafana loads these on
               # every startup with no runtime API calls needed here
               # (previously this step made a series of curl/python3 calls
-              # against Grafana's provisioning HTTP API to create the same
+              # against Grafana'\''s provisioning HTTP API to create the same
               # objects -- removed in favor of the file-provisioned
               # version, which ships with the hotel app compose stack
               # instead of depending on this workflow).
