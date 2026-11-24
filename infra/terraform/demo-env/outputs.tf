@@ -4,8 +4,8 @@ output "vm_id" {
 }
 
 output "public_ip_address" {
-  description = "Static public IP address of the demo environment."
-  value       = azurerm_public_ip.demo.ip_address
+  description = "Static public IP address of the demo environment (either the pre-existing public_ip_name IP, or a freshly created per-demo one -- see variables.tf)."
+  value       = local.public_ip_address
 }
 
 output "os_disk_id" {

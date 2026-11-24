@@ -24,17 +24,21 @@ variable "resource_group_name" {
 
 variable "vm_size" {
   description = <<-EOT
-    Azure VM size for the demo host. Defaults to Standard_B2s (Standard BS
-    Family) because the subscription currently has 0 quota for the DSv5/DASv5
-    families (confirmed via a real failed apply: "exceeding approved
-    standardDSv5Family Cores quota ... Current Limit: 0") -- `az vm
-    list-usage --location eastus2` showed 10 cores available in Standard BS
-    Family at the time this default was set. Revisit if/when a quota
-    increase is approved (see DEMO-01.1's cost model section) or a different
-    region/family is preferred.
+    Azure VM size for the demo host. Defaults to Standard_F8s_v2 (8 vCPU /
+    16 GiB) to fit the combined CloudMax + fault-injector hotel-reservation-
+    application footprint (deploy_hotel_reservation_app defaults to true in
+    demo-create.yml as of this change, adding ~20 extra containers on top of
+    CloudMax's own 8). `az vm list-usage --location eastus2` showed 10 cores
+    of quota in standardFSv2Family (0 in use) at the time this default was
+    set -- 8 vCPU fits with headroom to spare. The previous default,
+    Standard_B2s (2 vCPU / 4 GiB, Standard BS Family), is no longer large
+    enough now that the hotel app is deployed by default; it remains a valid
+    override for CloudMax-only demos (pass a smaller vm_size explicitly).
+    Revisit if/when a quota increase is approved for a different family (see
+    DEMO-01.1's cost model section).
   EOT
   type        = string
-  default     = "Standard_B2s"
+  default     = "Standard_F8s_v2"
 }
 
 variable "os_disk_size_gb" {
@@ -108,6 +112,31 @@ variable "admin_username" {
 variable "admin_ssh_public_key" {
   description = "SSH public key installed on the VM for az vm run-command access."
   type        = string
+}
+
+variable "public_ip_name" {
+  description = <<-EOT
+    Name of an EXISTING static Standard-SKU public IP resource (in
+    resource_group_name) to attach to the demo VM, instead of creating a new
+    per-demo IP. Defaults to "cloudmax-vm-ip" (135.232.101.211 at the time
+    this default was set), a pre-reserved address that fault-injector's
+    hotel-reservation-application frontend has hardcoded as its backend API
+    URL (REACT_APP_API_URL, baked in at build time, not overridable at
+    runtime) -- so the demo VM must bind this specific IP for that app's
+    frontend-to-backend calls to work without a custom rebuild.
+
+    Referenced via a data source (see main.tf), never a Terraform-managed
+    resource -- terraform destroy therefore never deletes it; only resources
+    Terraform itself creates are ever destroyed.
+
+    Set to "" (empty string) to fall back to the old behavior of creating a
+    fresh, Terraform-managed, per-demo static IP instead (named
+    "demo-<demo_name>-pip") -- required for running more than one demo
+    concurrently, since one public IP can only be attached to one NIC at a
+    time.
+  EOT
+  type        = string
+  default     = "cloudmax-vm-ip"
 }
 
 variable "tags" {
