@@ -110,10 +110,7 @@ resource "azurerm_network_security_group" "demo" {
   # nginx entrypoint on host port 8090 (remapped from its upstream default of
   # 80, which would otherwise collide with cloudmax-frontend's own 80/443
   # binding on this same VM -- see docker-compose.override.yml written by
-  # that workflow's deploy step). Only this single entrypoint is exposed;
-  # its internal observability stack (Grafana/Jaeger/Prometheus/etc.) stays
-  # VM-internal, reachable only via `az vm run-command`, consistent with the
-  # no-direct-SSH posture below.
+  # that workflow's deploy step).
   security_rule {
     name                       = "allow-hotel-reservation-app"
     priority                   = 120
@@ -122,6 +119,81 @@ resource "azurerm_network_security_group" "demo" {
     protocol                   = "Tcp"
     source_port_range          = "*"
     destination_port_range     = "8090"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+
+  # The 5 rules below (150-210) were originally added out-of-band (portal/CLI,
+  # not Terraform) at some point after this module's initial authoring --
+  # confirmed via a live NSG audit that found them, plus 7 OTHER stray rules
+  # that didn't match anything actually deployed (langfuse, alertsapi,
+  # etl-simulator, etl-grafana, etl-grafana-mcp -- all removed directly via
+  # `az network nsg rule delete`) or opened a port nothing listens on
+  # (mcp-direct-access 8000, opa-policy-server 8181 -- neither cloudmax's
+  # mcp-server nor opa are published to the VM's host interface in
+  # docker-compose.prod.yml, only reachable container-to-container). Since
+  # this resource's inline security_rule blocks are the authoritative,
+  # Terraform-managed definition of this NSG, any rule not declared here is
+  # at risk of being silently dropped (or at minimum drifts unnoticed) on a
+  # future `terraform apply` -- these 5 are now codified to prevent that,
+  # matching their exact names/priorities/ports as found live so this apply
+  # is a no-op against the current NSG rather than a disruptive recreate.
+  security_rule {
+    name                       = "grafana-ui"
+    priority                   = 150
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "3002"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+
+  security_rule {
+    name                       = "cloudmax-mcp-tls"
+    priority                   = 160
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "8443"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+
+  security_rule {
+    name                       = "jaeger-mcp"
+    priority                   = 190
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "8011"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+
+  security_rule {
+    name                       = "grafana-mcp-server"
+    priority                   = 200
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "8012"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+
+  security_rule {
+    name                       = "jaeger-hotel-ui"
+    priority                   = 210
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "16686"
     source_address_prefix      = "*"
     destination_address_prefix = "*"
   }
