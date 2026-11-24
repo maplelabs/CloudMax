@@ -611,9 +611,7 @@ jobs:
 
               if [ -z "$GRAFANA_API_KEY" ]; then
                 echo "::warning::Failed to mint a Grafana service-account token -- grafana-mcp-server will run without a working GRAFANA_API_KEY."
-                exit 0
-              fi
-
+              else
               az login --identity
               ACR_NAME=$(echo "${ACR_REGISTRY_ARG}" | cut -d"." -f1)
               az acr login --name "$ACR_NAME"
@@ -633,6 +631,113 @@ jobs:
               # but it diffs each service's resolved config against what is
               # already running and leaves everything else untouched.
               docker compose up -d grafana-mcp-server
+              fi
+
+              # --- Provision Grafana alerting -> CloudMax webhook ----------
+              # Wires up the "fault happens -> Grafana alerts -> CloudMax
+              # auto-triages it" loop end to end: a contact point pointing at
+              # CloudMax backend webhook ingestion endpoint, a default
+              # notification policy routing to it, and an alert rule that
+              # actually fires on the hotel app nginx 5xx error rate
+              # (exposed by hotel-nginx-log-exporter -> hotel-prometheus,
+              # metric nginx_http_response_count_total). Uses Grafana
+              # provisioning HTTP API (X-Disable-Provenance so these remain
+              # editable from the Grafana UI afterward, not locked as
+              # file-provisioned). Idempotent: checks for an existing
+              # contact point / alert rule by name before creating, safe to
+              # re-run against an already-provisioned Grafana (e.g.
+              # redeploying onto a snapshot-restored VM). Every python3 -c
+              # call below is kept to a single physical line on purpose:
+              # this whole script is itself embedded in a YAML block literal,
+              # where a line less indented than the block would terminate it
+              # early, and Python requires zero/consistent top-level
+              # indentation, so multi-line heredocs do not mix safely with
+              # either constraint here.
+              PROV_HDRS=(-u "admin:${ADMIN_PW}" -H "Content-Type: application/json" -H "X-Disable-Provenance: true")
+              WEBHOOK_URL="http://cloudmax-backend:8000/v1/webhooks/alerts/grafana"
+
+              CP_EXISTS=$(curl -sf "${PROV_HDRS[@]}" http://localhost:3002/api/v1/provisioning/contact-points | python3 -c "import sys, json; cps = json.load(sys.stdin); print(\"yes\" if any(c.get(\"name\") == \"cloudmax-webhook\" for c in cps) else \"\")" 2>/dev/null || echo "")
+
+              if [ -z "$CP_EXISTS" ]; then
+                curl -sf "${PROV_HDRS[@]}" -X POST -d "{\"name\":\"cloudmax-webhook\",\"type\":\"webhook\",\"settings\":{\"url\":\"${WEBHOOK_URL}\",\"httpMethod\":\"POST\"}}" http://localhost:3002/api/v1/provisioning/contact-points >/dev/null && echo "Created Grafana contact point cloudmax-webhook." || echo "::warning::Failed to create Grafana contact point cloudmax-webhook -- alerts will not reach CloudMax."
+              else
+                echo "Grafana contact point cloudmax-webhook already exists -- leaving it untouched."
+              fi
+
+              # Route the default notification policy to cloudmax-webhook
+              # (preserves any other existing top-level policy settings,
+              # only overrides the receiver field).
+              curl -sf "${PROV_HDRS[@]}" http://localhost:3002/api/v1/provisioning/policies | python3 -c "import sys, json; p = json.load(sys.stdin); p[\"receiver\"] = \"cloudmax-webhook\"; print(json.dumps(p))" > /tmp/grafana-policy.json 2>/dev/null
+
+              if [ -s /tmp/grafana-policy.json ]; then
+                curl -sf "${PROV_HDRS[@]}" -X PUT -d @/tmp/grafana-policy.json http://localhost:3002/api/v1/provisioning/policies >/dev/null && echo "Routed default notification policy to cloudmax-webhook." || echo "::warning::Failed to update Grafana notification policy -- alerts may not reach CloudMax."
+              else
+                echo "::warning::Could not read existing Grafana notification policy -- skipping routing update."
+              fi
+              rm -f /tmp/grafana-policy.json
+
+              FOLDER_UID=$(curl -sf "${PROV_HDRS[@]}" http://localhost:3002/api/folders | python3 -c "import sys, json; fs = json.load(sys.stdin); m = [f for f in fs if f.get(\"title\") == \"Hotel Reservation Alerts\"]; print(m[0][\"uid\"] if m else \"\")" 2>/dev/null || echo "")
+
+              if [ -z "$FOLDER_UID" ]; then
+                FOLDER_UID=$(curl -sf "${PROV_HDRS[@]}" -X POST -d "{\"title\":\"Hotel Reservation Alerts\"}" http://localhost:3002/api/folders | python3 -c "import sys, json; print(json.load(sys.stdin).get(\"uid\", \"\"))" 2>/dev/null || echo "")
+              fi
+
+              PROM_UID=$(curl -sf "${PROV_HDRS[@]}" http://localhost:3002/api/datasources | python3 -c "import sys, json; ds = json.load(sys.stdin); m = [d for d in ds if d.get(\"type\") == \"prometheus\"]; print(m[0][\"uid\"] if m else \"\")" 2>/dev/null || echo "")
+
+              if [ -z "$FOLDER_UID" ] || [ -z "$PROM_UID" ]; then
+                echo "::warning::Could not resolve Grafana folder UID or Prometheus datasource UID -- skipping alert rule creation."
+              else
+                RULE_EXISTS=$(curl -sf "${PROV_HDRS[@]}" http://localhost:3002/api/v1/provisioning/alert-rules | python3 -c "import sys, json; rs = json.load(sys.stdin); print(\"yes\" if any(r.get(\"title\") == \"Nginx HTTP 5xx Errors High\" for r in rs) else \"\")" 2>/dev/null || echo "")
+
+                if [ -z "$RULE_EXISTS" ]; then
+                  python3 -c "import json; rule = {\"title\": \"Nginx HTTP 5xx Errors High\", \"ruleGroup\": \"hotel-app-alerts\", \"folderUID\": \"${FOLDER_UID}\", \"condition\": \"C\", \"data\": [{\"refId\": \"A\", \"datasourceUid\": \"${PROM_UID}\", \"relativeTimeRange\": {\"from\": 300, \"to\": 0}, \"model\": {\"refId\": \"A\", \"expr\": 'sum(rate(nginx_http_response_count_total{status=~\"5..\"}[5m]))', \"instant\": False, \"range\": True}}, {\"refId\": \"B\", \"datasourceUid\": \"__expr__\", \"relativeTimeRange\": {\"from\": 300, \"to\": 0}, \"model\": {\"refId\": \"B\", \"type\": \"reduce\", \"expression\": \"A\", \"reducer\": \"dropNN\"}}, {\"refId\": \"C\", \"datasourceUid\": \"__expr__\", \"relativeTimeRange\": {\"from\": 300, \"to\": 0}, \"model\": {\"refId\": \"C\", \"type\": \"threshold\", \"expression\": \"B\", \"conditions\": [{\"evaluator\": {\"type\": \"gt\", \"params\": [0]}}]}}], \"noDataState\": \"OK\", \"execErrState\": \"Error\", \"for\": \"1m\", \"annotations\": {\"summary\": \"Nginx is returning HTTP 5xx errors on the hotel reservation app\"}, \"labels\": {\"severity\": \"P1\"}}; json.dump(rule, open(\"/tmp/grafana-alert-rule.json\", \"w\"))"
+                  curl -sf "${PROV_HDRS[@]}" -X POST -d @/tmp/grafana-alert-rule.json http://localhost:3002/api/v1/provisioning/alert-rules >/dev/null && echo "Created Grafana alert rule: Nginx HTTP 5xx Errors High." || echo "::warning::Failed to create Grafana alert rule -- faults will not trigger automated CloudMax triage."
+                  rm -f /tmp/grafana-alert-rule.json
+                else
+                  echo "Grafana alert rule Nginx HTTP 5xx Errors High already exists -- leaving it untouched."
+                fi
+              fi
+            '
+
+      - name: Seed CloudMax MCP connections for Grafana/Jaeger (optional)
+        id: seed_mcp_config
+        if: ${{ inputs.deploy_hotel_reservation_app }}
+        run: |
+          set -euo pipefail
+          VM_ID="${{ steps.apply.outputs.vm_id }}"
+
+          # CloudMax's backend reads its MCP/observability-system connections
+          # from the app_config DB table (CONFIG_DB=true in
+          # docker-compose.prod.yml), not from env vars -- that table is
+          # empty by default, so without this step CloudMax would never
+          # discover hotel-grafana-mcp/hotel-jaeger-mcp on its own, even
+          # though both are already network-reachable by container name (see
+          # the hotel-app deploy step's bridging above).
+          #
+          # Runs the seed script INSIDE the cloudmax-backend container via
+          # docker exec (base64-encoded onto the VM first, docker cp'd in,
+          # then executed) so it reuses the app's own SQLAlchemy models/DB
+          # connection exactly as the running app would -- no hand-written
+          # SQL, no separate DB credentials needed on this side at all.
+          az vm run-command invoke \
+            --ids "$VM_ID" \
+            --command-id RunShellScript \
+            --parameters "IiIiCk9uZS1vZmYgc2VlZDogZW5zdXJlIENsb3VkTWF4J3MgQXBwQ29uZmlnLm1jcF9jb25uZWN0aW9ucyBpbmNsdWRlcyBlbmFibGVkCkdyYWZhbmEgYW5kIEphZWdlciBNQ1Agc2VydmVyIGVudHJpZXMgcG9pbnRpbmcgYXQgdGhlIGhvdGVsIGFwcCdzIG93bgpNQ1Agc2VydmVycyAoaG90ZWwtZ3JhZmFuYS1tY3AgLyBob3RlbC1qYWVnZXItbWNwKSwgcmVhY2hhYmxlIGJ5IGNvbnRhaW5lcgpuYW1lIHNpbmNlIGJvdGggc3RhY2tzIGFyZSBicmlkZ2VkIG9udG8gYSBzaGFyZWQgZG9ja2VyIG5ldHdvcmsgYnkKZGVtby1jcmVhdGUueW1sLgoKUnVuIGluc2lkZSB0aGUgY2xvdWRtYXgtYmFja2VuZCBjb250YWluZXIgKGhhcyBEQVRBQkFTRV9VUkwgKyBhbGwgdGhlCmFwcCdzIG93biBtb2RlbHMgYWxyZWFkeSBhdmFpbGFibGUgb24gUFlUSE9OUEFUSD0vYXBwKSwgc28gdGhpcyByZXVzZXMgdGhlCmV4YWN0IHNhbWUgU1FMQWxjaGVteSBtb2RlbHMvdHlwZXMgdGhlIHJ1bm5pbmcgYXBwIGl0c2VsZiB1c2VzIC0tIG5vCmhhbmQtd3JpdHRlbiBTUUwsIG5vIGVudW0tdHlwZSBndWVzc2luZy4KCklkZW1wb3RlbnQ6IHJlcGxhY2VzIGFueSBleGlzdGluZyBncmFmYW5hL2phZWdlciBlbnRyaWVzIGluCm1jcF9jb25uZWN0aW9ucy5zeXN0ZW1zIChrZWVwaW5nIGFueSBvdGhlciBlbnRyaWVzLCBlLmcuIG9wZW5zZWFyY2gsCnVudG91Y2hlZCkgcmF0aGVyIHRoYW4gYXBwZW5kaW5nIGR1cGxpY2F0ZXMgb24gZXZlcnkgZGVtby1jcmVhdGUueW1sIHJ1bi4KIiIiCmltcG9ydCBhc3luY2lvCgpmcm9tIHNxbGFsY2hlbXkgaW1wb3J0IHNlbGVjdAoKZnJvbSBzcmMuc2VydmVyLmFwaXNfdjEuZGVwZW5kZW5jaWVzIGltcG9ydCBhc3luY19kYl9zZXNzaW9uCmZyb20gc3JjLnNlcnZlci5tb2RlbHMuZGIuYXBwX2NvbmZpZyBpbXBvcnQgQXBwQ29uZmlnCmZyb20gc3JjLnNlcnZlci5tb2RlbHMuYXBpLmVudW1zIGltcG9ydCBTZXZlcml0eQoKR1JBRkFOQV9VUkwgPSAiaHR0cDovL2hvdGVsLWdyYWZhbmEtbWNwOjgwMDAvbWNwIgpKQUVHRVJfVVJMID0gImh0dHA6Ly9ob3RlbC1qYWVnZXItbWNwOjgwMDAvbWNwIgoKCmRlZiBtY3Bfc3lzdGVtKG5hbWUsIHVybCk6CiAgICByZXR1cm4gewogICAgICAgICJvYnNlcnZhYmlsaXR5X3N5c3RlbSI6IG5hbWUsCiAgICAgICAgImVuYWJsZWQiOiBUcnVlLAogICAgICAgICJjb25uZWN0aW9uX2NvbmZpZyI6IHsKICAgICAgICAgICAgImNvbm5lY3Rpb25fdHlwZSI6ICJzdHJlYW1hYmxlX2h0dHAiLAogICAgICAgICAgICAiZW5kcG9pbnRfdXJsIjogdXJsLAogICAgICAgICAgICAiaHR0cF9oZWFkZXJzIjogW10sCiAgICAgICAgICAgICJtdGxzX2VuYWJsZWQiOiBGYWxzZSwKICAgICAgICB9LAogICAgfQoKCmFzeW5jIGRlZiBtYWluKCk6CiAgICBhc3luYyB3aXRoIGFzeW5jX2RiX3Nlc3Npb24oKSBhcyBzZXNzaW9uOgogICAgICAgIHJlc3VsdCA9IGF3YWl0IHNlc3Npb24uZXhlY3V0ZSgKICAgICAgICAgICAgc2VsZWN0KEFwcENvbmZpZykub3JkZXJfYnkoQXBwQ29uZmlnLmlkLmRlc2MoKSkubGltaXQoMSkKICAgICAgICApCiAgICAgICAgY29uZmlnID0gcmVzdWx0LnNjYWxhcl9vbmVfb3Jfbm9uZSgpCgogICAgICAgIG5ld19zeXN0ZW1zID0gW21jcF9zeXN0ZW0oImdyYWZhbmEiLCBHUkFGQU5BX1VSTCksIG1jcF9zeXN0ZW0oImphZWdlciIsIEpBRUdFUl9VUkwpXQoKICAgICAgICBpZiBjb25maWc6CiAgICAgICAgICAgIGV4aXN0aW5nID0gKGNvbmZpZy5tY3BfY29ubmVjdGlvbnMgb3Ige30pLmdldCgic3lzdGVtcyIsIFtdKQogICAgICAgICAgICBrZXB0ID0gW3MgZm9yIHMgaW4gZXhpc3RpbmcgaWYgcy5nZXQoIm9ic2VydmFiaWxpdHlfc3lzdGVtIikgbm90IGluICgiZ3JhZmFuYSIsICJqYWVnZXIiKV0KICAgICAgICAgICAgY29uZmlnLm1jcF9jb25uZWN0aW9ucyA9IHsic3lzdGVtcyI6IGtlcHQgKyBuZXdfc3lzdGVtc30KICAgICAgICAgICAgcHJpbnQoZiJVcGRhdGVkIGV4aXN0aW5nIEFwcENvbmZpZyAoaWQ9e2NvbmZpZy5pZH0pIHdpdGggZ3JhZmFuYS9qYWVnZXIgTUNQIGNvbm5lY3Rpb25zLiIpCiAgICAgICAgZWxzZToKICAgICAgICAgICAgY29uZmlnID0gQXBwQ29uZmlnKAogICAgICAgICAgICAgICAgZW5hYmxlZF9zZXZlcml0aWVzPVtTZXZlcml0eS5QMV0sCiAgICAgICAgICAgICAgICBtY3BfY29ubmVjdGlvbnM9eyJzeXN0ZW1zIjogbmV3X3N5c3RlbXN9LAogICAgICAgICAgICAgICAgY29kZV90cmlhZ2luZ19hZ2VudF9lbmFibGVkPUZhbHNlLAogICAgICAgICAgICAgICAgb3JjaGVzdHJhdG9yX2FnZW50cz0xLAogICAgICAgICAgICAgICAgY2hhb3Nfc3lzdGVtX2VuYWJsZWQ9RmFsc2UsCiAgICAgICAgICAgICAgICBhdXRvbWF0aWNfdHJpYWdlPVRydWUsCiAgICAgICAgICAgICAgICBhbGVydF9ncm91cGluZ19lbmFibGVkPVRydWUsCiAgICAgICAgICAgICkKICAgICAgICAgICAgc2Vzc2lvbi5hZGQoY29uZmlnKQogICAgICAgICAgICBwcmludCgiTm8gZXhpc3RpbmcgQXBwQ29uZmlnIGZvdW5kIC0tIGNyZWF0ZWQgYSBuZXcgb25lIHdpdGggZ3JhZmFuYS9qYWVnZXIgTUNQIGNvbm5lY3Rpb25zLiIpCgogICAgICAgIGF3YWl0IHNlc3Npb24uY29tbWl0KCkKCgphc3luY2lvLnJ1bihtYWluKCkpCnByaW50KCJEb25lLiIpCg==" \
+            --scripts '
+              set -eu
+              PAYLOAD_B64="$1"
+
+              if ! docker ps --format "{{.Names}}" | grep -qx "cloudmax-backend"; then
+                echo "::warning::cloudmax-backend container not found -- skipping MCP connection seeding."
+                exit 0
+              fi
+
+              echo "$PAYLOAD_B64" | base64 -d > /tmp/seed_mcp_config.py
+              docker cp /tmp/seed_mcp_config.py cloudmax-backend:/tmp/seed_mcp_config.py
+              docker exec cloudmax-backend python3 /tmp/seed_mcp_config.py \
+                && echo "CloudMax MCP connections seeded (grafana/jaeger)." \
+                || echo "::warning::Failed to seed CloudMax MCP connections -- configure Grafana/Jaeger manually via CloudMax'\''s Settings UI."
+              rm -f /tmp/seed_mcp_config.py
             '
 
       - name: Health check
