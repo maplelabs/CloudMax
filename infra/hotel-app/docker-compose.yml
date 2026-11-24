@@ -363,6 +363,22 @@ services:
     volumes:
       - nginx_logs:/var/log/nginx
       - ./config/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    # The nginx:alpine image ships /var/log/nginx/access.log and error.log
+    # as symlinks to /dev/stdout / /dev/stderr (for `docker logs` visibility).
+    # The nginx_logs named volume above is seeded from those symlinks on
+    # first mount, which breaks hotel-nginx-log-exporter (it tails/seeks the
+    # file directly -- "panic: Seek error ... illegal seek" against a pipe).
+    # Our nginx.conf already writes access_log to both the real file path
+    # and /dev/stdout explicitly, so replacing the symlinks with real files
+    # before nginx starts keeps `docker logs hotel-nginx` working via the
+    # explicit /dev/stdout directive while giving the exporter a real,
+    # seekable file to tail.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        rm -f /var/log/nginx/access.log /var/log/nginx/error.log
+        touch /var/log/nginx/access.log /var/log/nginx/error.log
+        exec nginx -g 'daemon off;'
     depends_on:
       - frontend
       - nodejs-bff
