@@ -414,6 +414,111 @@ jobs:
               done
             '
 
+      - name: Provision Grafana API key for grafana-mcp-server (optional)
+        id: grafana_key
+        if: ${{ inputs.deploy_hotel_reservation_app }}
+        run: |
+          set -euo pipefail
+          VM_ID="${{ steps.apply.outputs.vm_id }}"
+
+          # grafana-mcp-server needs a real Grafana service-account token to
+          # actually work (GRAFANA_API_KEY defaults to an empty string in
+          # infra/hotel-app/docker-compose.yml otherwise -- see that file's
+          # header comment). A Grafana API token can only be minted by
+          # calling Grafana's own HTTP API *after* Grafana itself is up
+          # (chicken-and-egg: it is not a value that can be pre-generated
+          # like postgres-password/redis-queue-auth), so this cannot be a
+          # Key Vault bootstrap step -- it has to run post-deploy, here.
+          #
+          # Uses python3 for JSON parsing (not jq) -- jq is not in this VM's
+          # cloud-init package list (main.tf), but python3 is guaranteed
+          # present as a transitive dependency of the Azure CLI install,
+          # which every prior step on this VM already depends on.
+          az vm run-command invoke \
+            --ids "$VM_ID" \
+            --command-id RunShellScript \
+            --parameters "${{ vars.ACR_REGISTRY }}" "${{ vars.IMAGE_NAMESPACE }}" "${{ inputs.hotel_image_tag }}" "${{ steps.apply.outputs.public_ip }}" \
+            --scripts '
+              set -eu
+              ACR_REGISTRY_ARG="$1"
+              IMAGE_NAMESPACE_ARG="$2"
+              HOTEL_IMAGE_TAG_ARG="$3"
+              PUBLIC_IP_ARG="$4"
+              if [ -z "${IMAGE_NAMESPACE_ARG}" ]; then
+                IMAGE_NAMESPACE_ARG="cloudmax"
+              fi
+
+              # Read the admin password Grafana is actually running with
+              # (ground truth from the live container config), rather than
+              # re-parsing docker-compose.yml -- avoids any drift if the
+              # compose file default ever changes.
+              ADMIN_PW=$(docker inspect hotel-grafana --format "{{range .Config.Env}}{{println .}}{{end}}" | grep "^GF_SECURITY_ADMIN_PASSWORD=" | cut -d= -f2-)
+              if [ -z "$ADMIN_PW" ]; then
+                echo "::warning::Could not read GF_SECURITY_ADMIN_PASSWORD from hotel-grafana container -- skipping Grafana API key provisioning."
+                exit 0
+              fi
+
+              # Grafana itself can take longer to accept API calls than its
+              # container to report "running" (first-boot DB migrations).
+              READY=0
+              for i in $(seq 1 30); do
+                if curl -sf -u "admin:${ADMIN_PW}" http://localhost:3002/api/health >/dev/null 2>&1; then
+                  READY=1
+                  break
+                fi
+                sleep 5
+              done
+              if [ "$READY" != "1" ]; then
+                echo "::warning::Grafana API never became ready -- skipping Grafana API key provisioning. grafana-mcp-server will run without a working GRAFANA_API_KEY."
+                exit 0
+              fi
+
+              # Reuse the service account across demo redeploys on the same
+              # VM (snapshot-restore case) instead of accumulating one per
+              # run; only the token itself is always freshly minted, since
+              # Grafana only ever reveals a token value once, at creation.
+              SA_ID=$(curl -sf -u "admin:${ADMIN_PW}" "http://localhost:3002/api/serviceaccounts/search?query=cloudmax-mcp" \
+                | python3 -c "import sys,json; accs=json.load(sys.stdin).get(\"serviceAccounts\",[]); print(accs[0][\"id\"] if accs else \"\")")
+
+              if [ -z "$SA_ID" ]; then
+                SA_ID=$(curl -sf -u "admin:${ADMIN_PW}" -X POST -H "Content-Type: application/json" \
+                  -d "{\"name\":\"cloudmax-mcp\",\"role\":\"Admin\"}" \
+                  http://localhost:3002/api/serviceaccounts \
+                  | python3 -c "import sys,json; print(json.load(sys.stdin)[\"id\"])")
+              fi
+
+              TOKEN_NAME="mcp-token-$(date +%s)"
+              GRAFANA_API_KEY=$(curl -sf -u "admin:${ADMIN_PW}" -X POST -H "Content-Type: application/json" \
+                -d "{\"name\":\"${TOKEN_NAME}\"}" \
+                "http://localhost:3002/api/serviceaccounts/${SA_ID}/tokens" \
+                | python3 -c "import sys,json; print(json.load(sys.stdin)[\"key\"])")
+
+              if [ -z "$GRAFANA_API_KEY" ]; then
+                echo "::warning::Failed to mint a Grafana service-account token -- grafana-mcp-server will run without a working GRAFANA_API_KEY."
+                exit 0
+              fi
+
+              az login --identity
+              ACR_NAME=$(echo "${ACR_REGISTRY_ARG}" | cut -d"." -f1)
+              az acr login --name "$ACR_NAME"
+
+              cd /opt/cloudmax/infra/hotel-app
+              export COMPOSE_PROJECT_NAME=hotel
+              export ACR_REGISTRY="${ACR_REGISTRY_ARG}"
+              export IMAGE_NAMESPACE="${IMAGE_NAMESPACE_ARG}"
+              export HOTEL_IMAGE_TAG="${HOTEL_IMAGE_TAG_ARG}"
+              export PUBLIC_IP="${PUBLIC_IP_ARG}"
+              export TRACING_ENABLED="true"
+              export GRAFANA_API_KEY="$GRAFANA_API_KEY"
+
+              # Only recreates grafana-mcp-server (the sole service whose
+              # env actually changed) -- docker compose still needs the
+              # full file + all referenced vars to interpolate correctly,
+              # but it diffs each service's resolved config against what is
+              # already running and leaves everything else untouched.
+              docker compose up -d grafana-mcp-server
+            '
+
       - name: Health check
         id: health
         run: |
