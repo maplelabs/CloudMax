@@ -1,0 +1,61 @@
+# File-provisioned Grafana alert rule(s) for the hotel reservation app.
+# Auto-created in the "Hotel Reservation Alerts" folder (Grafana creates
+# the folder itself if it doesn't already exist) on every Grafana startup
+# -- no runtime API calls or manual UI setup needed.
+#
+# References the prometheus datasource by its fixed uid (see
+# ../datasource.yml) and the cloudmax-webhook contact point (see
+# ./contactpoints.yml / ./policies.yml) for where alerts get routed.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: hotel-app-alerts
+    folder: Hotel Reservation Alerts
+    interval: 1m
+    rules:
+      - uid: nginx-5xx-high
+        title: Nginx HTTP 5xx Errors High
+        condition: C
+        for: 1m
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          summary: Nginx is returning HTTP 5xx errors on the hotel reservation app
+        labels:
+          severity: P1
+        data:
+          - refId: A
+            datasourceUid: prometheus-ds
+            relativeTimeRange:
+              from: 300
+              to: 0
+            model:
+              refId: A
+              expr: 'sum(rate(nginx_http_response_count_total{status=~"5.."}[5m]))'
+              instant: false
+              range: true
+          - refId: B
+            datasourceUid: "__expr__"
+            relativeTimeRange:
+              from: 300
+              to: 0
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: dropNN
+          - refId: C
+            datasourceUid: "__expr__"
+            relativeTimeRange:
+              from: 300
+              to: 0
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 0

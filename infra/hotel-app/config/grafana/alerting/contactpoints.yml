@@ -1,0 +1,16 @@
+# File-provisioned Grafana contact point: routes alert notifications to
+# CloudMax's webhook ingestion endpoint so faults detected by Grafana
+# alert rules (see ./rules.yml) automatically trigger CloudMax's automated
+# triage, with no manual Grafana UI setup or API-call step required after
+# each demo deploy.
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: cloudmax-webhook
+    receivers:
+      - uid: cloudmax-webhook-receiver
+        type: webhook
+        settings:
+          url: http://cloudmax-backend:8000/v1/webhooks/alerts/grafana
+          httpMethod: POST

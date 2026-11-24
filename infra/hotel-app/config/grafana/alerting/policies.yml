@@ -1,0 +1,10 @@
+# File-provisioned default notification policy: routes all alerts (no
+# label-based matchers needed, this is the catch-all root policy) to the
+# cloudmax-webhook contact point defined in ./contactpoints.yml.
+apiVersion: 1
+
+policies:
+  - orgId: 1
+    receiver: cloudmax-webhook
+    group_by:
+      - alertname

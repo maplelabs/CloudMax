@@ -7,6 +7,10 @@ datasources:
     url: http://prometheus:9090
     isDefault: true
     editable: true
+    # Fixed uid so file-provisioned alert rules (see ./alerting/rules.yml)
+    # can reference this datasource by a known value instead of looking it
+    # up at runtime -- Grafana would otherwise generate a random uid.
+    uid: prometheus-ds
   - name: Loki
     type: loki
     access: proxy

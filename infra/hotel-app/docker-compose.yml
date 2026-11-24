@@ -449,6 +449,11 @@ services:
       - ./grafana-dashboards:/etc/grafana/provisioning/dashboards/hotel:ro
       - ./config/grafana/dashboard-config.yml:/etc/grafana/provisioning/dashboards/dashboard-config.yml:ro
       - ./config/grafana/datasource.yml:/etc/grafana/provisioning/datasources/datasource.yml:ro
+      # File-provisioned alert rule, contact point & notification policy
+      # wiring faults -> Grafana alerts -> CloudMax's webhook ingestion
+      # endpoint (see ./config/grafana/alerting/*.yml) -- no manual UI setup
+      # or runtime API-call step required after each demo deploy.
+      - ./config/grafana/alerting:/etc/grafana/provisioning/alerting:ro
     depends_on:
       - prometheus
     networks:

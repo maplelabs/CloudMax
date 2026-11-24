@@ -633,70 +633,19 @@ jobs:
               docker compose up -d grafana-mcp-server
               fi
 
-              # --- Provision Grafana alerting -> CloudMax webhook ----------
-              # Wires up the "fault happens -> Grafana alerts -> CloudMax
-              # auto-triages it" loop end to end: a contact point pointing at
-              # CloudMax backend webhook ingestion endpoint, a default
-              # notification policy routing to it, and an alert rule that
-              # actually fires on the hotel app nginx 5xx error rate
-              # (exposed by hotel-nginx-log-exporter -> hotel-prometheus,
-              # metric nginx_http_response_count_total). Uses Grafana
-              # provisioning HTTP API (X-Disable-Provenance so these remain
-              # editable from the Grafana UI afterward, not locked as
-              # file-provisioned). Idempotent: checks for an existing
-              # contact point / alert rule by name before creating, safe to
-              # re-run against an already-provisioned Grafana (e.g.
-              # redeploying onto a snapshot-restored VM). Every python3 -c
-              # call below is kept to a single physical line on purpose:
-              # this whole script is itself embedded in a YAML block literal,
-              # where a line less indented than the block would terminate it
-              # early, and Python requires zero/consistent top-level
-              # indentation, so multi-line heredocs do not mix safely with
-              # either constraint here.
-              PROV_HDRS=(-u "admin:${ADMIN_PW}" -H "Content-Type: application/json" -H "X-Disable-Provenance: true")
-              WEBHOOK_URL="http://cloudmax-backend:8000/v1/webhooks/alerts/grafana"
-
-              CP_EXISTS=$(curl -sf "${PROV_HDRS[@]}" http://localhost:3002/api/v1/provisioning/contact-points | python3 -c "import sys, json; cps = json.load(sys.stdin); print(\"yes\" if any(c.get(\"name\") == \"cloudmax-webhook\" for c in cps) else \"\")" 2>/dev/null || echo "")
-
-              if [ -z "$CP_EXISTS" ]; then
-                curl -sf "${PROV_HDRS[@]}" -X POST -d "{\"name\":\"cloudmax-webhook\",\"type\":\"webhook\",\"settings\":{\"url\":\"${WEBHOOK_URL}\",\"httpMethod\":\"POST\"}}" http://localhost:3002/api/v1/provisioning/contact-points >/dev/null && echo "Created Grafana contact point cloudmax-webhook." || echo "::warning::Failed to create Grafana contact point cloudmax-webhook -- alerts will not reach CloudMax."
-              else
-                echo "Grafana contact point cloudmax-webhook already exists -- leaving it untouched."
-              fi
-
-              # Route the default notification policy to cloudmax-webhook
-              # (preserves any other existing top-level policy settings,
-              # only overrides the receiver field).
-              curl -sf "${PROV_HDRS[@]}" http://localhost:3002/api/v1/provisioning/policies | python3 -c "import sys, json; p = json.load(sys.stdin); p[\"receiver\"] = \"cloudmax-webhook\"; print(json.dumps(p))" > /tmp/grafana-policy.json 2>/dev/null
-
-              if [ -s /tmp/grafana-policy.json ]; then
-                curl -sf "${PROV_HDRS[@]}" -X PUT -d @/tmp/grafana-policy.json http://localhost:3002/api/v1/provisioning/policies >/dev/null && echo "Routed default notification policy to cloudmax-webhook." || echo "::warning::Failed to update Grafana notification policy -- alerts may not reach CloudMax."
-              else
-                echo "::warning::Could not read existing Grafana notification policy -- skipping routing update."
-              fi
-              rm -f /tmp/grafana-policy.json
-
-              FOLDER_UID=$(curl -sf "${PROV_HDRS[@]}" http://localhost:3002/api/folders | python3 -c "import sys, json; fs = json.load(sys.stdin); m = [f for f in fs if f.get(\"title\") == \"Hotel Reservation Alerts\"]; print(m[0][\"uid\"] if m else \"\")" 2>/dev/null || echo "")
-
-              if [ -z "$FOLDER_UID" ]; then
-                FOLDER_UID=$(curl -sf "${PROV_HDRS[@]}" -X POST -d "{\"title\":\"Hotel Reservation Alerts\"}" http://localhost:3002/api/folders | python3 -c "import sys, json; print(json.load(sys.stdin).get(\"uid\", \"\"))" 2>/dev/null || echo "")
-              fi
-
-              PROM_UID=$(curl -sf "${PROV_HDRS[@]}" http://localhost:3002/api/datasources | python3 -c "import sys, json; ds = json.load(sys.stdin); m = [d for d in ds if d.get(\"type\") == \"prometheus\"]; print(m[0][\"uid\"] if m else \"\")" 2>/dev/null || echo "")
-
-              if [ -z "$FOLDER_UID" ] || [ -z "$PROM_UID" ]; then
-                echo "::warning::Could not resolve Grafana folder UID or Prometheus datasource UID -- skipping alert rule creation."
-              else
-                RULE_EXISTS=$(curl -sf "${PROV_HDRS[@]}" http://localhost:3002/api/v1/provisioning/alert-rules | python3 -c "import sys, json; rs = json.load(sys.stdin); print(\"yes\" if any(r.get(\"title\") == \"Nginx HTTP 5xx Errors High\" for r in rs) else \"\")" 2>/dev/null || echo "")
-
-                if [ -z "$RULE_EXISTS" ]; then
-                  python3 -c "import json; rule = {\"title\": \"Nginx HTTP 5xx Errors High\", \"ruleGroup\": \"hotel-app-alerts\", \"folderUID\": \"${FOLDER_UID}\", \"condition\": \"C\", \"data\": [{\"refId\": \"A\", \"datasourceUid\": \"${PROM_UID}\", \"relativeTimeRange\": {\"from\": 300, \"to\": 0}, \"model\": {\"refId\": \"A\", \"expr\": 'sum(rate(nginx_http_response_count_total{status=~\"5..\"}[5m]))', \"instant\": False, \"range\": True}}, {\"refId\": \"B\", \"datasourceUid\": \"__expr__\", \"relativeTimeRange\": {\"from\": 300, \"to\": 0}, \"model\": {\"refId\": \"B\", \"type\": \"reduce\", \"expression\": \"A\", \"reducer\": \"dropNN\"}}, {\"refId\": \"C\", \"datasourceUid\": \"__expr__\", \"relativeTimeRange\": {\"from\": 300, \"to\": 0}, \"model\": {\"refId\": \"C\", \"type\": \"threshold\", \"expression\": \"B\", \"conditions\": [{\"evaluator\": {\"type\": \"gt\", \"params\": [0]}}]}}], \"noDataState\": \"OK\", \"execErrState\": \"Error\", \"for\": \"1m\", \"annotations\": {\"summary\": \"Nginx is returning HTTP 5xx errors on the hotel reservation app\"}, \"labels\": {\"severity\": \"P1\"}}; json.dump(rule, open(\"/tmp/grafana-alert-rule.json\", \"w\"))"
-                  curl -sf "${PROV_HDRS[@]}" -X POST -d @/tmp/grafana-alert-rule.json http://localhost:3002/api/v1/provisioning/alert-rules >/dev/null && echo "Created Grafana alert rule: Nginx HTTP 5xx Errors High." || echo "::warning::Failed to create Grafana alert rule -- faults will not trigger automated CloudMax triage."
-                  rm -f /tmp/grafana-alert-rule.json
-                else
-                  echo "Grafana alert rule Nginx HTTP 5xx Errors High already exists -- leaving it untouched."
-                fi
-              fi
+              # Grafana alerting (contact point -> cloudmax-webhook,
+              # notification policy, and the "Nginx HTTP 5xx Errors High"
+              # alert rule in the "Hotel Reservation Alerts" folder) is now
+              # file-provisioned directly from the repo -- see
+              # infra/hotel-app/config/grafana/alerting/*.yml, mounted into
+              # the grafana container at
+              # /etc/grafana/provisioning/alerting. Grafana loads these on
+              # every startup with no runtime API calls needed here
+              # (previously this step made a series of curl/python3 calls
+              # against Grafana's provisioning HTTP API to create the same
+              # objects -- removed in favor of the file-provisioned
+              # version, which ships with the hotel app compose stack
+              # instead of depending on this workflow).
             '
 
       - name: Seed CloudMax MCP connections for Grafana/Jaeger (optional)
