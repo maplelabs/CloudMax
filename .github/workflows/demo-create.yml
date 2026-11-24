@@ -293,7 +293,23 @@ jobs:
           # ends), supplied as a run-command *parameter* (not interpolated
           # into the script text), so it never appears in command history
           # or Azure Activity Log entries for this operation.
-          az vm run-command invoke \
+          # az vm run-command only reports whether the Azure VM Agent
+          # extension itself executed (displayStatus "Provisioning
+          # succeeded") -- NOT whether the inner script actually ran to
+          # completion (confirmed via a real failed run: on a freshly
+          # bootstrapped VM, this script silently stopped right after
+          # `cloud-init status --wait` with zero output afterward -- neither
+          # "Login Succeeded" nor any docker/git output -- yet the extension
+          # still reported success, and /opt/cloudmax never got created).
+          # The DEPLOY_STACK_OK sentinel echoed as this script's last line
+          # is the only reliable signal every command actually ran;
+          # retrying works around the observed cold-boot timing flake
+          # (confirmed: manually re-invoking the identical script right
+          # after a "silent stop" succeeded on the very next attempt, no
+          # code change needed).
+          MAX_ATTEMPTS=3
+          for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+          OUTPUT=$(az vm run-command invoke \
             --ids "$VM_ID" \
             --command-id RunShellScript \
             --parameters "${DEPLOY_TOKEN}" "${GITHUB_SHA}" "${{ vars.DEMO_KEY_VAULT_ID }}" \
@@ -348,7 +364,20 @@ jobs:
 
               docker compose -f docker-compose.prod.yml pull
               docker compose -f docker-compose.prod.yml up -d
-            '
+              echo "DEPLOY_STACK_OK"
+            ' 2>&1)
+          echo "$OUTPUT"
+          if echo "$OUTPUT" | grep -q "DEPLOY_STACK_OK"; then
+            echo "Deploy application stack: confirmed complete on attempt ${attempt}."
+            break
+          fi
+          if [ "$attempt" -eq "$MAX_ATTEMPTS" ]; then
+            echo "::error::Deploy application stack never reached its DEPLOY_STACK_OK sentinel after ${MAX_ATTEMPTS} attempts -- the script silently stopped partway (see output above)."
+            exit 1
+          fi
+          echo "DEPLOY_STACK_OK sentinel not found (attempt ${attempt}/${MAX_ATTEMPTS}) -- retrying in 30s..."
+          sleep 30
+          done
 
       - name: Deploy hotel-reservation-application (optional)
         id: deploy_hotel
@@ -366,7 +395,11 @@ jobs:
           # checkout). This removes the need for the fault-injector-read-token
           # Key Vault secret entirely (previously fetched here on every demo
           # create -- see kv-bootstrap-secrets.yml's history).
-          az vm run-command invoke \
+          # Same "extension status != script exit code" blind spot as the
+          # CloudMax deploy step above -- retry on a missing sentinel.
+          MAX_ATTEMPTS=3
+          for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+          OUTPUT=$(az vm run-command invoke \
             --ids "$VM_ID" \
             --command-id RunShellScript \
             --parameters "${{ vars.ACR_REGISTRY }}" "${{ vars.IMAGE_NAMESPACE }}" "latest" "${{ steps.apply.outputs.public_ip }}" \
@@ -378,6 +411,11 @@ jobs:
               PUBLIC_IP_ARG="$4"
               if [ -z "${IMAGE_NAMESPACE_ARG}" ]; then
                 IMAGE_NAMESPACE_ARG="cloudmax"
+              fi
+
+              if [ ! -d /opt/cloudmax/infra/hotel-app ]; then
+                echo "ERROR: /opt/cloudmax/infra/hotel-app not found -- CloudMax deploy step has not completed on this VM yet." >&2
+                exit 1
               fi
 
               az login --identity
@@ -424,7 +462,20 @@ jobs:
                   docker network connect --alias "$CNAME" "$HOTEL_NET" "$CNAME" 2>/dev/null || true
                 fi
               done
-            '
+              echo "DEPLOY_HOTEL_OK"
+            ' 2>&1)
+          echo "$OUTPUT"
+          if echo "$OUTPUT" | grep -q "DEPLOY_HOTEL_OK"; then
+            echo "Deploy hotel-reservation-application: confirmed complete on attempt ${attempt}."
+            break
+          fi
+          if [ "$attempt" -eq "$MAX_ATTEMPTS" ]; then
+            echo "::error::Deploy hotel-reservation-application never reached its DEPLOY_HOTEL_OK sentinel after ${MAX_ATTEMPTS} attempts (see output above)."
+            exit 1
+          fi
+          echo "DEPLOY_HOTEL_OK sentinel not found (attempt ${attempt}/${MAX_ATTEMPTS}) -- retrying in 30s..."
+          sleep 30
+          done
 
       - name: Deploy fault-injector platform (optional)
         id: deploy_fault_injector
@@ -444,7 +495,11 @@ jobs:
           # custom image (Airflow's DockerOperator spawns sibling containers
           # on the HOST Docker daemon, bind-mounting them by HOST filesystem
           # path).
-          az vm run-command invoke \
+          # Same "extension status != script exit code" blind spot as the
+          # CloudMax deploy step above -- retry on a missing sentinel.
+          MAX_ATTEMPTS=3
+          for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+          OUTPUT=$(az vm run-command invoke \
             --ids "$VM_ID" \
             --command-id RunShellScript \
             --parameters "${{ vars.ACR_REGISTRY }}" "${{ vars.IMAGE_NAMESPACE }}" "latest" \
@@ -455,6 +510,11 @@ jobs:
               FAULT_INJECTOR_IMAGE_TAG_ARG="$3"
               if [ -z "${IMAGE_NAMESPACE_ARG}" ]; then
                 IMAGE_NAMESPACE_ARG="cloudmax"
+              fi
+
+              if [ ! -d /opt/cloudmax/infra/fault-injector ]; then
+                echo "ERROR: /opt/cloudmax/infra/fault-injector not found -- CloudMax deploy step has not completed on this VM yet." >&2
+                exit 1
               fi
 
               az login --identity
@@ -496,7 +556,20 @@ jobs:
               if docker ps --format "{{.Names}}" | grep -qx "fault-notification"; then
                 docker network connect --alias fault-notification "$CLOUDMAX_NET" fault-notification 2>/dev/null || true
               fi
-            '
+              echo "DEPLOY_FAULT_INJECTOR_OK"
+            ' 2>&1)
+          echo "$OUTPUT"
+          if echo "$OUTPUT" | grep -q "DEPLOY_FAULT_INJECTOR_OK"; then
+            echo "Deploy fault-injector platform: confirmed complete on attempt ${attempt}."
+            break
+          fi
+          if [ "$attempt" -eq "$MAX_ATTEMPTS" ]; then
+            echo "::error::Deploy fault-injector platform never reached its DEPLOY_FAULT_INJECTOR_OK sentinel after ${MAX_ATTEMPTS} attempts (see output above)."
+            exit 1
+          fi
+          echo "DEPLOY_FAULT_INJECTOR_OK sentinel not found (attempt ${attempt}/${MAX_ATTEMPTS}) -- retrying in 30s..."
+          sleep 30
+          done
 
       - name: Provision Grafana API key for grafana-mcp-server (optional)
         id: grafana_key
