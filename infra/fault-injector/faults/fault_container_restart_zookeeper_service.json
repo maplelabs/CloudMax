@@ -1,0 +1,10 @@
+{
+  "dag_id": "hs_zookeeper_service_container_restart",
+  "task_id": "hs_zookeeper_service_container_restart",
+  "task_name": "hs_zookeeper_service_container_restart",
+  "experiment_json": "exp_container_restart_zookeeper_service.json",
+  "tags": ["severity:medium", "target_system:zookeeper-service", "configured_duration:300"],
+  "description": "As part of container restart workflow, search-service container running inside the container with name hotel-zookeeper-1 is restarted continuously. Due to this, some of the http requests to search service  in the hotel reservation application fails with 500 error as the container is not up and running to cater to the http requests",
+  "schedule": "@once"
+}
+

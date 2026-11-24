@@ -1,0 +1,13 @@
+{
+  "dag_id": "fault_postgres_write_lock",
+  "task_id": "postgres_write_lock_task",
+  "task_name": "postgres_write_lock_name",
+  "experiment_json": "exp_postgres_write_lock.json",
+  "tags": [
+    "severity:medium",
+    "target_system:hotel-postgres",
+    "configured_duration:300"
+  ],
+  "description": "When an ACCESS EXCLUSIVE (write) lock is acquired on the booking_details table for an extended duration, all concurrent INSERT, UPDATE, and DELETE operations on the table are blocked. As a result, the booking-service fails to persist booking details, leading to 5xx errors on booking-related APIs. Additionally the backend service which is gets failed during the view detail  as Insert query could not get succeeded is  hotel-booking-post-processing-service-1.",
+  "schedule": "@once"
+}

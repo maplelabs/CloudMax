@@ -123,6 +123,28 @@ resource "azurerm_network_security_group" "demo" {
     destination_address_prefix = "*"
   }
 
+  # fault-injector's own platform (optional, see DEMO-01.3's demo-create.yml
+  # `deploy_fault_injector` input) -- the Airflow-based chaos engineering
+  # control plane users interact with to inject faults into the hotel
+  # reservation app. Only its Fault Gen UI (port 4009) is exposed; its Vite
+  # dev server does its own server-side /api proxy to custom-ui-backend over
+  # the fault-injector stack's own internal Docker network, so no other
+  # fault-injector port needs to be public (custom-ui-backend:3009,
+  # fault-service:8010, Airflow's own webserver, and the airflow-postgres/
+  # redis metadata store all stay VM-internal, same posture as the hotel
+  # app's observability stack above).
+  security_rule {
+    name                       = "allow-fault-injector-ui"
+    priority                   = 130
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "4009"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+
   # The 5 rules below (150-210) were originally added out-of-band (portal/CLI,
   # not Terraform) at some point after this module's initial authoring --
   # confirmed via a live NSG audit that found them, plus 7 OTHER stray rules

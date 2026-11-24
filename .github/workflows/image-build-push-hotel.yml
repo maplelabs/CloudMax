@@ -1,14 +1,24 @@
-# Builds and publishes the fault-injector hotel-reservation-application's 7
-# custom-built services to ACR, so demo-create.yml's hotel app deploy step
-# never needs to clone or read the private maplelabs/fault-injector repo on
-# the demo VM itself (previously done via a GitHub PAT stored in
-# cloudmax-kv's fault-injector-read-token secret -- removed, see
-# kv-bootstrap-secrets.yml).
+# Builds and publishes two independent groups of custom-built images from the
+# private maplelabs/fault-injector repo to ACR, so demo-create.yml's deploy
+# steps never need to clone or read that repo on the demo VM itself
+# (previously done via a GitHub PAT stored in cloudmax-kv's
+# fault-injector-read-token secret -- removed, see kv-bootstrap-secrets.yml):
 #
-# Only 7 of the ~24 services in that app's docker-compose.yml have a
-# `build:` block; the rest (postgres, elasticsearch, kafka, nginx, grafana,
-# jaeger, prometheus, loki, promtail, cadvisor, the exporters, and the two
-# MCP servers) already use public images and are untouched/unpublished here.
+#   - hotel-*: the hotel-reservation-application TARGET app's 7 custom-built
+#     services (under target-applications/hotel-reservation-application/).
+#     Only 7 of the ~24 services in that app's docker-compose.yml have a
+#     `build:` block; the rest (postgres, elasticsearch, kafka, nginx,
+#     grafana, jaeger, prometheus, loki, promtail, cadvisor, the exporters,
+#     and the two MCP servers) already use public images and are
+#     untouched/unpublished here.
+#
+#   - fault-injector-*: the fault-injector PLATFORM's own 4 custom-built
+#     services (at the repo root, under src/backend/services/ and
+#     src/frontend/fault-gen-app/) -- the Airflow-based chaos engineering
+#     control plane users interact with to actually trigger faults against
+#     the hotel app. Airflow itself (webserver/scheduler/worker/triggerer)
+#     uses the public priyanshu01ce/airflow_chaos:latest image directly and
+#     is not built/pushed here -- see infra/fault-injector/docker-compose.yml.
 #
 # Authentication:
 #   - FAULT_INJECTOR_READ_TOKEN (repo secret, NOT Key Vault): a read-only,
@@ -32,7 +42,7 @@
 # HOTEL_IMAGE_TAG, mirroring the `:latest`/`:sha-<gitsha>` policy already
 # used for CloudMax's own images in image-build-push.yml).
 
-name: Build and Push Hotel App Images
+name: Build and Push Hotel App and Fault-Injector Images
 
 on:
   workflow_dispatch:
@@ -47,26 +57,36 @@ concurrency:
 
 jobs:
   build-and-push:
-    name: Build & push hotel-${{ matrix.component.name }}
+    name: Build & push ${{ matrix.component.image }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         component:
-          - name: nodejs-bff
-            path: src/backend/services/nodejs-bff
-          - name: search-service
-            path: src/backend/services/search_service
-          - name: authentication-service
-            path: src/backend/services/authentication
-          - name: booking-service
-            path: src/backend/services/booking_service
-          - name: frontend
-            path: src/frontend/hotel-reservation-ui
-          - name: invoice-service
-            path: src/backend/services/invoice-service
-          - name: booking-post-processing-service
-            path: src/backend/services/booking-post-processing-service
+          # --- hotel-reservation-application (target app) -----------------
+          - image: hotel-nodejs-bff
+            context: target-applications/hotel-reservation-application/src/backend/services/nodejs-bff
+          - image: hotel-search-service
+            context: target-applications/hotel-reservation-application/src/backend/services/search_service
+          - image: hotel-authentication-service
+            context: target-applications/hotel-reservation-application/src/backend/services/authentication
+          - image: hotel-booking-service
+            context: target-applications/hotel-reservation-application/src/backend/services/booking_service
+          - image: hotel-frontend
+            context: target-applications/hotel-reservation-application/src/frontend/hotel-reservation-ui
+          - image: hotel-invoice-service
+            context: target-applications/hotel-reservation-application/src/backend/services/invoice-service
+          - image: hotel-booking-post-processing-service
+            context: target-applications/hotel-reservation-application/src/backend/services/booking-post-processing-service
+          # --- fault-injector platform (chaos engineering control plane) --
+          - image: fault-injector-service
+            context: src/backend/services/fault-service
+          - image: fault-injector-notification
+            context: src/backend/services/fault-notification
+          - image: fault-injector-ui-backend
+            context: src/backend/services/nodejs-bff
+          - image: fault-injector-ui-frontend
+            context: src/frontend/fault-gen-app
     env:
       FAULT_INJECTOR_READ_TOKEN: ${{ secrets.FAULT_INJECTOR_READ_TOKEN }}
     steps:
@@ -100,7 +120,7 @@ jobs:
             NAMESPACE="cloudmax"
           fi
           echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
-          echo "image_repo=${{ vars.ACR_REGISTRY }}/${NAMESPACE}/hotel-${{ matrix.component.name }}" >> "$GITHUB_OUTPUT"
+          echo "image_repo=${{ vars.ACR_REGISTRY }}/${NAMESPACE}/${{ matrix.component.image }}" >> "$GITHUB_OUTPUT"
 
       - name: Azure login (OIDC)
         uses: azure/login@v2
@@ -117,11 +137,11 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and push hotel-${{ matrix.component.name }}
+      - name: Build and push ${{ matrix.component.image }}
         uses: docker/build-push-action@v6
         with:
-          context: fault-injector/target-applications/hotel-reservation-application/${{ matrix.component.path }}
-          file: fault-injector/target-applications/hotel-reservation-application/${{ matrix.component.path }}/Dockerfile
+          context: fault-injector/${{ matrix.component.context }}
+          file: fault-injector/${{ matrix.component.context }}/Dockerfile
           push: true
           tags: |
             ${{ steps.meta.outputs.image_repo }}:sha-${{ steps.meta.outputs.short_sha }}

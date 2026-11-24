@@ -1,0 +1,26 @@
+{
+    "version": "1.0.0",
+    "title": "Docker Container Restart Experiment",
+    "description": "Restart Docker containers continuously to test application resilience",
+    "tags": ["docker", "container-restart", "chaos-engineering", "continuous"],
+    "method": [
+        {
+            "name": "continuous-docker-container-restart",
+            "type": "action",
+            "provider": {
+                "type": "python",
+                "module": "docker_container_restart",
+                "func": "restart_docker_containers_continuous",
+                "arguments": {
+                    "container_names": ["hotel-zookeeper-1"],
+                    "qty": 1,
+                    "rand": true,
+                    "timeout": 10,
+                    "interval": 30,
+                    "duration": 300
+                }
+            }
+        }
+    ],
+    "rollbacks": []
+}

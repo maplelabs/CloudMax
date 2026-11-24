@@ -1,0 +1,16 @@
+{
+  "dag_id": "fault_memory_stress_search_service",
+  "task_id": "hs_search_service_container_memory_oom",
+  "task_name": "hs_search_service_container_memory_oom",
+  "experiment_json": "exp_memory_stress_search_service.json",
+  "tags": [
+    "severity:high",
+    "target_system:search-service",
+    "fault:memory-oom",
+    "configured_duration:400",
+    "configured_step_mb:100",
+    "configured_interval:15"
+  ],
+  "description": "The search-service container (hotel-search-service-1) experiences gradual memory consumption increase. Due to high memory usage, the container gets OOM killed and restarted continuously by the system. During this period, HTTP requests to the search service fail with 500 errors as the container is not available.",
+  "schedule": "@once"
+}

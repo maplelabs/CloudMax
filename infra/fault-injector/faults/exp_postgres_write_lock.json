@@ -1,0 +1,37 @@
+{
+    "version": "1.0.0",
+    "title": "Postgres Write Lock Chaos Experiment",
+    "description": "When an ACCESS EXCLUSIVE (write) lock is acquired on the booking_details table for an extended duration, all concurrent INSERT, UPDATE, and DELETE operations on the table are blocked. As a result, the booking-service fails to persist booking details, leading to 5xx errors on booking-related APIs. Additionally the backend service which is gets failed during the view detail  as Insert query could not get succeeded is  hotel-booking-post-processing-service-1.",
+    "tags": [
+        "postgres-fault",
+        "write-lock",
+        "chaos-engineering"
+    ],
+    "method": [
+        {
+            "name": "acquire-write-lock",
+            "type": "action",
+            "provider": {
+                "type": "python",
+                "module": "postgres_write_lock",
+                "func": "acquire_write_lock",
+                "arguments": {
+                    "lock_duration_sec": 300,
+                    "lock_timeout_ms": 5000
+                }
+            }
+        }
+    ],
+    "rollbacks": [
+        {
+            "name": "release-write-lock",
+            "type": "action",
+            "provider": {
+                "type": "python",
+                "module": "postgres_write_lock",
+                "func": "release_write_lock",
+                "arguments": {}
+            }
+        }
+    ]
+}

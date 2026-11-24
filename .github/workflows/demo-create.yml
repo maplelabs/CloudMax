@@ -46,43 +46,77 @@
 # DEMO-01.5 Sec 4) -- never passed through GitHub Actions or stored on disk
 # outside the VM's own runtime environment.
 #
-# Default-on: fault-injector's hotel-reservation-application (deploy_hotel_reservation_app
-# input, default true -- set false to deploy CloudMax alone) -- a multi-service
-# target app (7 custom-built services, Postgres, Elasticsearch, Kafka+Zookeeper,
-# plus a full observability stack: Jaeger, Prometheus, Grafana, Loki/Promtail,
-# cAdvisor, and two MCP servers purpose-built for AI-SRE-Ops integration:
-# grafana-mcp-server and jaeger-mcp-server) deployed as its own docker-compose
-# project (hotel) alongside the CloudMax stack on the SAME demo VM.
+# Default-on: this workflow deploys THREE independent docker-compose
+# projects onto the same demo VM, each with its own private bridge network,
+# forming the full end-to-end chaos engineering + AI triage demo:
+#
+#   1. cloudmax (docker-compose.prod.yml, always deployed): backend,
+#      frontend, code-triage-agent, mcp-server/mcp-nginx, postgres, redis,
+#      opa -- the AI-SRE-Ops alert triage platform itself.
+#   2. hotel (infra/hotel-app/docker-compose.yml, deploy_hotel_reservation_app
+#      input, default true): fault-injector's hotel-reservation-application
+#      TARGET app -- 7 custom-built services, Postgres, Elasticsearch,
+#      Kafka+Zookeeper, plus a full observability stack (Jaeger, Prometheus,
+#      Grafana, Loki/Promtail, cAdvisor) and two MCP servers for AI-SRE-Ops
+#      integration (grafana-mcp-server, jaeger-mcp-server). A Grafana alert
+#      rule (provisioned separately, see hotel-grafana's Alerting UI) fires
+#      on faults and POSTs to cloudmax-backend's /v1/webhooks/alerts/grafana.
+#   3. faultinjector (infra/fault-injector/docker-compose.yml,
+#      deploy_fault_injector input, default true, no-op if
+#      deploy_hotel_reservation_app is false): the fault-injector PLATFORM
+#      itself -- an Airflow-based chaos engineering control plane a user
+#      drives from its Fault Gen UI (port 4009) to manually trigger faults
+#      (Postgres write locks, Kafka schema mismatches, container restarts,
+#      memory stress, etc.) against the hotel app's containers, via Docker-
+#      socket-spawned sibling containers running chaostoolkit experiments.
+#      fault-notification also POSTs directly to cloudmax-backend's
+#      /v1/fault-ledger endpoint with ground-truth "this exact fault was
+#      injected" records, for comparison against the AI triage's own
+#      root-cause diagnosis.
+#
+# End-to-end flow once all three are up: a user triggers a fault from the
+# Fault Gen UI -> fault-injector executes it against a hotel-app container
+# -> Jaeger/Grafana observe the resulting failure in the hotel app -> a
+# Grafana alert rule fires -> CloudMax receives the alert via webhook and
+# runs automated AI triage (code-triage-agent) -> the triage result can be
+# compared against fault-notification's ground-truth fault-ledger record.
 #
 # This VM never clones or reads the private maplelabs/fault-injector repo at
-# all. The 7 custom-built services (nodejs-bff, search-service, etc.) are
-# pre-built and published to ACR by the separate image-build-push-hotel.yml
-# pipeline (which does need read access to that repo, via a repo secret,
-# FAULT_INJECTOR_READ_TOKEN -- a fine-grained, read-only PAT, used only at
-# build time inside that workflow's own runner, never stored in Key Vault or
-# on any VM). The compose file itself (with image: refs instead of build:
-# blocks) plus its config/database-init/dashboard assets are vendored into
-# THIS repo under infra/hotel-app/ -- see that directory's docker-compose.yml
-# header comment for the exact adaptations made. This demo VM only needs
-# `az acr login` (OIDC, already set up for CloudMax's own images) plus
-# `docker compose pull` -- the same no-PAT-on-the-VM posture as the CloudMax
-# deploy step above.
+# all. All 11 custom-built services across the hotel app (7) and the
+# fault-injector platform (4) are pre-built and published to ACR by the
+# separate image-build-push-hotel.yml pipeline (which does need read access
+# to that repo, via a repo secret, FAULT_INJECTOR_READ_TOKEN -- a
+# fine-grained, read-only PAT, used only at build time inside that
+# workflow's own runner, never stored in Key Vault or on any VM). Each
+# compose file (with image: refs instead of build: blocks) plus its
+# config/database-init/dashboard/DAG/fault-definition assets are vendored
+# into THIS repo under infra/hotel-app/ and infra/fault-injector/ -- see
+# each directory's docker-compose.yml header comment for the exact
+# adaptations made. This demo VM only needs `az acr login` (OIDC, already
+# set up for CloudMax's own images) plus `docker compose pull` -- the same
+# no-PAT-on-the-VM posture as the CloudMax deploy step above. The one
+# exception is fault-injector's own Docker-socket requirement (see
+# infra/fault-injector/docker-compose.yml header comment) -- a deliberate,
+# acknowledged elevation needed for it to actually execute faults.
 #
-# Networking: both docker-compose projects keep their own private bridge
-# networks (neither compose file declares an external/shared one, so neither
-# repo takes on a dependency on infrastructure owned by the other). Instead,
-# after both stacks are up, every container from each project is additionally
-# attached to the other project's network via docker network connect
-# --alias <service-name>, so DNS-based service discovery works symmetrically
-# in both directions (e.g. CloudMax's mcp-server/backend can resolve
-# hotel-grafana-mcp/hotel-jaeger-mcp/etc., and the hotel stack's services
-# can resolve cloudmax-backend/cloudmax-mcp-server/etc.).
+# Networking: all three docker-compose projects keep their own private
+# bridge networks (no compose file declares an external/shared one, so none
+# of the three repos/directories takes on a dependency on infrastructure
+# owned by the others). Instead, after each stack is up, relevant containers
+# are additionally attached to other projects' networks via `docker network
+# connect --alias <service-name>`, so DNS-based service discovery works
+# across stacks (e.g. CloudMax's mcp-server/backend can resolve
+# hotel-grafana-mcp/hotel-jaeger-mcp/etc., the hotel stack's services can
+# resolve cloudmax-backend/cloudmax-mcp-server/etc., and
+# fault-injector's fault-notification can resolve cloudmax-backend).
 #
 # Sizing: the Terraform module's vm_size default is Standard_F8s_v2 (8 vCPU /
 # 16 GiB, see variables.tf), sized for CloudMax plus the hotel stack's ~20
-# extra containers, since deploy_hotel_reservation_app now defaults to true.
-# Override this workflow's vm_size input to a smaller size (e.g. Standard_B2s)
-# for CloudMax-only demos (deploy_hotel_reservation_app=false).
+# extra containers plus fault-injector's ~11 (Airflow's webserver/scheduler/
+# worker/triggerer/init, Postgres, Redis, and its 4 custom services), since
+# both deploy_hotel_reservation_app and deploy_fault_injector now default to
+# true. Override this workflow's vm_size input to a smaller size (e.g.
+# Standard_B2s) for CloudMax-only demos (both flags false).
 #
 # Public IP: the demo VM binds a pre-reserved, fixed static IP ("cloudmax-vm-ip",
 # 135.232.101.211 at the time this was set) by default -- see
@@ -119,6 +153,16 @@ on:
         default: true
       hotel_image_tag:
         description: "Image tag to deploy for the hotel app's 7 custom-built services (hotel-nodejs-bff, hotel-search-service, etc.), published by image-build-push-hotel.yml. Defaults to :latest (that pipeline doesn't yet have a :verified-style promotion gate, unlike CloudMax's own images -- see IMG-01). Override to sha-<fault-injector-gitsha> to test a specific build."
+        required: false
+        type: string
+        default: "latest"
+      deploy_fault_injector:
+        description: "Also deploy the fault-injector chaos engineering platform itself (Airflow-based control plane, see infra/fault-injector/docker-compose.yml) alongside CloudMax and the hotel app, so a user can manually trigger faults against the hotel app from its Fault Gen UI. Defaults to true -- has no effect if deploy_hotel_reservation_app is false (nothing to inject faults into)."
+        required: false
+        type: boolean
+        default: true
+      fault_injector_image_tag:
+        description: "Image tag to deploy for the fault-injector platform's 4 custom-built services (fault-injector-service, fault-injector-notification, etc.), published by image-build-push-hotel.yml. Defaults to :latest, same policy as hotel_image_tag."
         required: false
         type: string
         default: "latest"
@@ -414,6 +458,78 @@ jobs:
               done
             '
 
+      - name: Deploy fault-injector platform (optional)
+        id: deploy_fault_injector
+        if: ${{ inputs.deploy_hotel_reservation_app && inputs.deploy_fault_injector }}
+        run: |
+          set -euo pipefail
+          VM_ID="${{ steps.apply.outputs.vm_id }}"
+
+          # Same no-PAT-on-the-VM posture as the hotel app deploy step above:
+          # the 4 custom-built fault-injector-* images are pre-built and
+          # published to ACR by image-build-push-hotel.yml. The Airflow DAG
+          # generator, fault-engine Python modules, and fault/experiment JSON
+          # definitions are vendored into infra/fault-injector/ in THIS repo
+          # (already present in /opt/cloudmax from the CloudMax deploy step's
+          # git clone) -- see that directory's docker-compose.yml header
+          # comment for why these specifically cannot just be baked into a
+          # custom image (Airflow's DockerOperator spawns sibling containers
+          # on the HOST Docker daemon, bind-mounting them by HOST filesystem
+          # path).
+          az vm run-command invoke \
+            --ids "$VM_ID" \
+            --command-id RunShellScript \
+            --parameters "${{ vars.ACR_REGISTRY }}" "${{ vars.IMAGE_NAMESPACE }}" "${{ inputs.fault_injector_image_tag }}" \
+            --scripts '
+              set -eu
+              ACR_REGISTRY_ARG="$1"
+              IMAGE_NAMESPACE_ARG="$2"
+              FAULT_INJECTOR_IMAGE_TAG_ARG="$3"
+              if [ -z "${IMAGE_NAMESPACE_ARG}" ]; then
+                IMAGE_NAMESPACE_ARG="cloudmax"
+              fi
+
+              az login --identity
+
+              ACR_NAME=$(echo "${ACR_REGISTRY_ARG}" | cut -d"." -f1)
+              az acr login --name "$ACR_NAME"
+
+              cd /opt/cloudmax/infra/fault-injector
+
+              export COMPOSE_PROJECT_NAME=faultinjector
+              export ACR_REGISTRY="${ACR_REGISTRY_ARG}"
+              export IMAGE_NAMESPACE="${IMAGE_NAMESPACE_ARG}"
+              export FAULT_INJECTOR_IMAGE_TAG="${FAULT_INJECTOR_IMAGE_TAG_ARG}"
+
+              # Builder.py (the Airflow DAG generator) spawns fault-execution
+              # containers as HOST-network siblings via the Docker socket,
+              # bind-mounting these two paths by HOST filesystem Source --
+              # must be absolute, real paths on this VM, not container-
+              # internal ones. /opt/cloudmax is this VMs real checkout of
+              # THIS repo (see the CloudMax deploy step above), so these
+              # vendored directories already exist there for free.
+              export HOST_FAULTS_DIR=/opt/cloudmax/infra/fault-injector/faults
+              export HOST_FAULT_ENGINE_DIR=/opt/cloudmax/infra/fault-injector/fault-engine
+
+              docker compose pull custom-ui-backend custom-ui-frontend fault-notification fault-service
+              docker compose up -d
+
+              # --- Bridge fault-notification onto the CloudMax stack --------
+              # Only fault-notification needs cross-stack reachability (it
+              # POSTs ground-truth "this fault was injected" records to
+              # cloudmax-backend:8000/v1/fault-ledger -- see
+              # fault_ledger.json). Everything else in this stack only talks
+              # to other containers within this same compose project, or
+              # spawns host-network sibling containers via the Docker socket
+              # (network_mode=host, no bridging needed). Same
+              # docker-network-connect --alias pattern as the hotel app
+              # bridging above, but one-directional and narrowly scoped.
+              CLOUDMAX_NET="cloudmax_cloudmax-network"
+              if docker ps --format "{{.Names}}" | grep -qx "fault-notification"; then
+                docker network connect --alias fault-notification "$CLOUDMAX_NET" fault-notification 2>/dev/null || true
+              fi
+            '
+
       - name: Provision Grafana API key for grafana-mcp-server (optional)
         id: grafana_key
         if: ${{ inputs.deploy_hotel_reservation_app }}
@@ -560,6 +676,17 @@ jobs:
               echo "- **URL:** http://${{ steps.apply.outputs.public_ip }}:8090"
               echo "- Reachable from the CloudMax stack (and vice versa) by container name on both stacks' bridge networks, e.g. \`http://hotel-grafana-mcp:8000\`, \`http://hotel-jaeger-mcp:8000\` from CloudMax, or \`http://cloudmax-backend:8000\` from the hotel stack."
               echo "- Internal-only (not exposed via NSG): Grafana, Jaeger UI, Prometheus, Loki, and the rest of the observability stack -- inspect via \`az vm run-command\` on \`${{ steps.apply.outputs.vm_id }}\`."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [ "${{ inputs.deploy_hotel_reservation_app }}" = "true" ] && [ "${{ inputs.deploy_fault_injector }}" = "true" ]; then
+            {
+              echo ""
+              echo "## fault-injector platform (Fault Gen UI)"
+              echo ""
+              echo "- **URL:** http://${{ steps.apply.outputs.public_ip }}:4009"
+              echo "- Use this to manually trigger faults against the hotel-reservation-application (Postgres write locks, Kafka schema mismatches, container restarts, memory stress, etc.). Each fault injection is reflected in Jaeger/Grafana, fires a Grafana alert into CloudMax for automated triage, and is separately ground-truth-recorded via cloudmax-backend's /v1/fault-ledger endpoint."
+              echo "- Internal-only (not exposed via NSG): Airflow webserver, airflow-postgres, redis, custom-ui-backend (3009), fault-service (8010) -- inspect via \`az vm run-command\` on \`${{ steps.apply.outputs.vm_id }}\`."
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 

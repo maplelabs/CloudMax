@@ -1,0 +1,72 @@
+{
+  "version": "1.0.0",
+  "title": "ES Application Timeout Fault Experiment",
+  "description": "While processing search and filter requests, the search-service sends queries to Elasticsearch that exceed the configured request timeout. Due to this, Elasticsearch does not respond within the expected time, causing the search-service to fail the requests. As a result, search and filter APIs in the hotel reservation application return 5xx errors.",
+  "tags": [
+    "elasticsearch",
+    "application-fault",
+    "timeout-fault",
+    "chaos-engineering"
+  ],
+  "configuration": {
+    "base_url": {
+      "type": "env",
+      "key": "BASE_URL",
+      "default": "http://localhost:8010/app-fault"
+    },
+    "fault_name": {
+      "type": "env",
+      "key": "ES_APPLICATION_TIMEOUT",
+      "default": "ES_APPLICATION_TIMEOUT"
+    },
+    "pause_duration": {
+      "type": "env",
+      "key": "pause_duration",
+      "default": 300
+    }
+  },
+  "method": [
+    {
+      "name": "enable-es-application-timeout-fault",
+      "type": "action",
+      "provider": {
+        "type": "python",
+        "module": "es_application_fault",
+        "func": "update_fault",
+        "arguments": {
+          "fault_flag": true,
+          "api_url": "${base_url}",
+          "fault_name": "${fault_name}"
+        }
+      }
+    },
+    {
+      "name": "wait-while-timeout-fault-active",
+      "type": "action",
+      "provider": {
+        "type": "python",
+        "module": "es_application_fault",
+        "func": "sleep_for_seconds",
+        "arguments": {
+          "seconds": "${pause_duration}"
+        }
+      }
+    }
+  ],
+  "rollbacks": [
+    {
+      "name": "disable-es-application-timeout-fault",
+      "type": "action",
+      "provider": {
+        "type": "python",
+        "module": "es_application_fault",
+        "func": "update_fault",
+        "arguments": {
+          "fault_flag": false,
+          "api_url": "${base_url}",
+          "fault_name": "${fault_name}"
+        }
+      }
+    }
+  ]
+}

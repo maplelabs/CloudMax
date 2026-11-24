@@ -1,0 +1,13 @@
+{
+  "dag_id": "postgres_statement_timeout",
+  "task_id": "postgres_statement_timeout_task",
+  "task_name": "postgres_statement_timeout_name",
+  "experiment_json": "exp_postgres_statement_timeout.json",
+  "tags": [
+    "severity:medium",
+    "target_system:booking-service",
+    "configured_duration:300"
+  ],
+  "description": "When the Get Booking Details GET API is called, the underlying database query takes longer than the configured execution time. As a result, PostgreSQL throws a statement timeout error, and the UI displays a 500 Internal Server Error.",
+  "schedule": "@once"
+}

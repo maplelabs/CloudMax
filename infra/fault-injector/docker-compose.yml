@@ -1,0 +1,342 @@
+# Vendored, adapted copy of maplelabs/fault-injector's root docker-compose.yaml
+# (the Airflow-based chaos engineering CONTROL PLANE users interact with to
+# inject faults into the hotel-reservation-application TARGET app -- see
+# infra/hotel-app/docker-compose.yml for that app itself).
+#
+# Adaptations from upstream:
+#   - All 4 custom-built services (fault-service, fault-notification,
+#     custom-ui-backend, custom-ui-frontend) use `image:` refs pointing at
+#     ACR instead of `build:` blocks -- pre-built and published by
+#     image-build-push-hotel.yml (fault-injector-* images), the same
+#     no-PAT-on-the-VM posture already used for the hotel app's 7 images.
+#     Airflow itself (webserver/scheduler/worker/triggerer/init) keeps using
+#     upstream's own public image (priyanshu01ce/airflow_chaos:latest)
+#     directly -- nothing to build there.
+#   - Airflow's DAG generator (builder.py), the fault-engine's Python
+#     modules, and the hotel app's fault/experiment JSON definitions are
+#     static source content with no `build:` step of their own, but they
+#     CANNOT simply be baked into a custom image either: builder.py uses
+#     Airflow's DockerOperator with docker_url="unix://var/run/docker.sock"
+#     to spawn FAULT EXECUTION as sibling containers on the HOST Docker
+#     daemon (network_mode="host"), bind-mounting HOST_FAULTS_DIR and
+#     HOST_FAULT_ENGINE_DIR by Source path -- Docker always resolves bind
+#     mount Source paths against the HOST filesystem, never against the
+#     calling container's filesystem, so these files must exist as real
+#     files at a real path on the demo VM itself, not just inside a
+#     container image. Vendoring them here (under ./dags, ./fault-engine,
+#     ./faults) solves this for free: demo-create.yml already git-clones
+#     this whole CloudMax repo onto the VM at /opt/cloudmax for the
+#     CloudMax/hotel-app deploy steps, so these vendored files are
+#     automatically real host files at
+#     /opt/cloudmax/infra/fault-injector/{dags,fault-engine,faults} with no
+#     second git clone, no new GitHub token on the VM, and no separate sync
+#     step. See demo-create.yml's fault-injector deploy step for how
+#     HOST_FAULTS_DIR / HOST_FAULT_ENGINE_DIR are set to those absolute
+#     paths.
+#   - fault_ledger.json's sre_api.base_url/put_base_url were hardcoded
+#     upstream to a stale http://<ip>:8080 placeholder that doesn't match
+#     any port CloudMax's backend actually listens on. Corrected here to
+#     http://cloudmax-backend:8000/v1/fault-ledger (confirmed present in
+#     CloudMax's backend OpenAPI schema: POST /v1/fault-ledger, PUT
+#     /v1/fault-ledger/{session_id}) -- reachable because demo-create.yml
+#     bridges the fault-notification container onto the CloudMax stack's
+#     own network after this compose project starts, the same
+#     docker-network-connect pattern already used for the hotel app (see
+#     that workflow's header comment).
+#   - fault-gen-logs / fault-gen-plugins are Airflow's own runtime log/
+#     plugin output directories (empty in the upstream repo, populated only
+#     at runtime) -- these use anonymous-free NAMED volumes here instead of
+#     host bind mounts, since there is no static content to vendor for them.
+#   - The ./src:/opt/airflow/src bind mount (upstream's whole backend+frontend
+#     source tree) is dropped -- grep'd builder.py and every fault-engine
+#     script and found nothing under /opt/airflow/src actually referenced at
+#     runtime; it appears to be a leftover/debugging convenience mount, not
+#     a functional dependency.
+#   - ~/.kube/config is NOT mounted (no Kubernetes cluster in this demo
+#     setup) -- the kubernetes_actions.py fault-engine module and any
+#     Kubernetes-targeted fault JSON configs will not work in this
+#     environment; only the Docker-based faults do. /var/run/docker.sock IS
+#     mounted (this is how fault-engine actually executes faults against
+#     hotel-app/CloudMax containers on this VM -- a deliberate, acknowledged
+#     elevation of what this VM's containers can do, scoped to this one
+#     compose project).
+#
+# Credentials: airflow/airflow (Postgres + Airflow admin user) and
+# admin/admin (Airflow UI, not exposed externally anyway) are upstream's own
+# hardcoded demo values for this throwaway chaos-engineering metadata store
+# -- not real secrets, not sourced from Key Vault, consistent with how
+# upstream ships this tool.
+#
+# Networking: this stack gets its own private bridge network
+# (fault_injector_network, i.e. faultinjector_fault_injector_network once
+# COMPOSE_PROJECT_NAME=faultinjector is applied), kept independent of the
+# hotel-app/CloudMax stacks' own networks. The only service that needs to
+# reach the CloudMax stack (fault-notification, to POST to
+# cloudmax-backend:8000/v1/fault-ledger) gets bridged onto
+# cloudmax_cloudmax-network post-startup by demo-create.yml, the same
+# docker-network-connect --alias pattern already used for the hotel app.
+# Everything else (Airflow, fault-service) only needs to reach other
+# containers in THIS compose project, or spawn host-network sibling
+# containers via the Docker socket -- no bridging needed for those.
+#
+# Access: only the Fault Gen UI (custom-ui-frontend, port 4009) is meant to
+# be used directly by a human -- its Vite dev server does its own
+# server-side /api proxy to custom-ui-backend:3009 over this stack's own
+# Docker network, so (unlike the hotel app frontend) no public IP needs to
+# be baked in anywhere. custom-ui-backend (3009) and fault-service (8010)
+# stay host-port-published (matching upstream, useful for `az vm
+# run-command` debugging) but are not opened in the NSG -- see
+# infra/terraform/demo-env/main.tf's allow-fault-injector-ui rule (4009
+# only).
+
+x-airflow-common: &airflow-common
+  image: priyanshu01ce/airflow_chaos:latest
+  user: root
+  environment:
+    AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@postgres:5432/airflow
+    AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
+    AIRFLOW__CORE__FERNET_KEY: ''
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+    KUBECONFIG: /root/.kube/config
+    HOST_FAULTS_DIR: ${HOST_FAULTS_DIR}
+    HOST_FAULT_ENGINE_DIR: ${HOST_FAULT_ENGINE_DIR}
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - fault_gen_logs:/opt/airflow/logs
+    - fault_gen_plugins:/opt/airflow/plugins
+    - ./faults:/opt/airflow/faults
+    - ./fault-engine:/opt/airflow/fault-engine
+    - /var/run/docker.sock:/var/run/docker.sock
+  networks:
+    - fault_injector_network
+
+services:
+  # ============================================
+  # AIRFLOW INFRASTRUCTURE
+  # ============================================
+
+  postgres:
+    image: postgres:13
+    container_name: airflow-postgres
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    networks:
+      - fault_injector_network
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+
+  redis:
+    image: redis:7.2
+    container_name: airflow-redis
+    ports:
+      - "6380:6379"
+    networks:
+      - fault_injector_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 30s
+      retries: 50
+      start_period: 30s
+    restart: always
+
+  # ============================================
+  # AIRFLOW SERVICES
+  # ============================================
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: airflow-init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        echo "Waiting for Postgres..."
+        until pg_isready -h postgres -p 5432 -U airflow; do
+          sleep 3
+        done
+        echo "Initializing Airflow database..."
+        airflow db migrate
+        echo "Creating admin user..."
+        airflow users create \
+          --username admin \
+          --password admin \
+          --firstname Admin \
+          --lastname User \
+          --role Admin \
+          --email admin@example.com || true
+        echo "Airflow initialization complete!"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: "no"
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: airflow-webserver
+    command: webserver
+    # Not exposed externally -- only custom-ui-backend talks to it
+    # internally (AIRFLOW_BASE_URL=http://airflow-webserver:8080 below).
+    cap_add:
+      - NET_ADMIN
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    restart: always
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: airflow-scheduler
+    command: scheduler
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    restart: always
+
+  airflow-worker:
+    <<: *airflow-common
+    container_name: airflow-worker
+    command: celery worker
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - 'celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}" || celery --app airflow.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}"'
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    restart: always
+
+  airflow-triggerer:
+    <<: *airflow-common
+    container_name: airflow-triggerer
+    command: triggerer
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    restart: always
+
+  # ============================================
+  # CUSTOM UI / API SERVICES (pre-built ACR images)
+  # ============================================
+
+  custom-ui-backend:
+    image: ${ACR_REGISTRY}/${IMAGE_NAMESPACE:-cloudmax}/fault-injector-ui-backend:${FAULT_INJECTOR_IMAGE_TAG:-latest}
+    container_name: fault-gen-backend
+    ports:
+      - "3009:3009"
+    environment:
+      AIRFLOW_BASE_URL: "http://airflow-webserver:8080"
+      AIRFLOW_USERNAME: "admin"
+      AIRFLOW_PASSWORD: "admin"
+      AIRFLOW_API_VERSION: "v1"
+      USE_JWT_AUTH: "false"
+      PORT: "3009"
+    networks:
+      - fault_injector_network
+    depends_on:
+      airflow-webserver:
+        condition: service_healthy
+    restart: unless-stopped
+
+  custom-ui-frontend:
+    image: ${ACR_REGISTRY}/${IMAGE_NAMESPACE:-cloudmax}/fault-injector-ui-frontend:${FAULT_INJECTOR_IMAGE_TAG:-latest}
+    container_name: fault-gen-application
+    ports:
+      - "4009:4009"
+    networks:
+      - fault_injector_network
+    depends_on:
+      - custom-ui-backend
+    restart: unless-stopped
+
+  fault-notification:
+    image: ${ACR_REGISTRY}/${IMAGE_NAMESPACE:-cloudmax}/fault-injector-notification:${FAULT_INJECTOR_IMAGE_TAG:-latest}
+    container_name: fault-notification
+    environment:
+      DB_USERNAME: airflow
+      DB_PASSWORD: airflow
+    volumes:
+      - ./fault_ledger.json:/app/fault_ledger.json:ro
+    networks:
+      - fault_injector_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  fault-service:
+    image: ${ACR_REGISTRY}/${IMAGE_NAMESPACE:-cloudmax}/fault-injector-service:${FAULT_INJECTOR_IMAGE_TAG:-latest}
+    container_name: fault-service
+    ports:
+      - "8010:8000"
+    environment:
+      DB_USER: airflow
+      DB_PASSWORD: airflow
+      DB_HOST: airflow-postgres
+      DB_PORT: "5432"
+      DB_NAME: airflow
+    volumes:
+      - ./faults:/app/faults
+    networks:
+      - fault_injector_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+# ============================================
+# VOLUMES
+# ============================================
+
+volumes:
+  postgres-db-volume:
+  fault_gen_logs:
+  fault_gen_plugins:
+
+# ============================================
+# NETWORKS
+# ============================================
+
+networks:
+  fault_injector_network:
+    driver: bridge

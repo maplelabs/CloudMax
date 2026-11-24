@@ -1,0 +1,13 @@
+{
+  "dag_id": "fault_es_application_query_timeout",
+  "task_id": "es_application_query_timeout_id",
+  "task_name": "es_application_query_timeout_name",
+  "experiment_json": "exp_es_application_query_timeout.json",
+  "tags": [
+    "severity:medium",
+    "target_system:search-service",
+    "configured_duration:300"
+  ],
+  "description": "While processing search and filter requests, the search-service sends queries to Elasticsearch that exceed the configured request timeout. Due to this, Elasticsearch does not respond within the expected time, causing the search-service to fail the requests. As a result, search and filter APIs in the hotel reservation application return 5xx errors.",
+  "schedule": "@once"
+}

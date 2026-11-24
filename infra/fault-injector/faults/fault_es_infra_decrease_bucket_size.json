@@ -1,0 +1,15 @@
+{
+  "dag_id": "fault_es_infra_decrease_bucket_size",
+  "task_id": "es_infra_descrease_bucket_size_id",
+  "task_name": "es_infra_descrease_bucket_size_name",
+  "experiment_json": "exp_es_infra_descrease_bucket_size.json",
+  "tags": [
+    "severity:medium",
+    "target_system:elasticsearch",
+    "configured_duration:300",
+    "bucket_size_fault",
+    "chaos-experiment"
+  ],
+  "description": "While processing search and filter requests, the search-service executes aggregation queries in Elasticsearch that generate a bucket count exceeding the configured bucket size limit. Due to this, Elasticsearch rejects the query execution, causing the search-service to fail the request. As a result, search and filter APIs in the hotel reservation application return 5xx errors.",
+  "schedule": "@daily"
+}

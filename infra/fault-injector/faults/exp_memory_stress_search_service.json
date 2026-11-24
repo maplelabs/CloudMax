@@ -1,0 +1,33 @@
+{
+    "version": "1.0.0",
+    "title": "Docker Memory Stress Test - Seach Service",
+    "description": "The search-service container (hotel-search-service-1) experiences gradual memory consumption increase. Due to high memory usage, the container gets OOM killed and restarted continuously by the system. During this period, HTTP requests to the search service fail with 500 errors as the container is not available.",
+    "tags": [
+        "docker",
+        "memory-stress",
+        "oom"
+    ],
+    "method": [
+        {
+            "name": "gradual-memory-stress-search-service",
+            "type": "action",
+            "provider": {
+                "type": "python",
+                "module": "docker_memory_stress",
+                "func": "gradual_memory_stress_and_kill",
+                "arguments": {
+                    "container_name": "hotel-search-service-1",
+                    "num_workers": 10,
+                    "memory_per_worker_mb": 50,
+                    "stagger_interval": 15,
+                    "worker_duration": 90,
+                    "kill_at_iteration": 8,
+                    "kill_signal": "SIGKILL",
+                    "total_duration": 400,
+                    "sleep_after_kill": 5,
+                    "sleep_after_restart": 15
+                }
+            }
+        }
+    ]
+}

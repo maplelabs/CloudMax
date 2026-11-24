@@ -1,0 +1,141 @@
+{
+    "version": "1.0.0",
+    "title": "Elasticsearch Bucket Size Chaos Experiment",
+    "description": "While processing search and filter requests, the search-service executes aggregation queries in Elasticsearch that generate a bucket count exceeding the configured bucket size limit. Due to this, Elasticsearch rejects the query execution, causing the search-service to fail the request. As a result, search and filter APIs in the hotel reservation application return 5xx errors.",
+    "tags": ["elasticsearch", "bucket-size", "fault-injection", "chaos-engineering", "aggregations"],
+    "configuration": {
+        "jwt_token": {
+            "type": "env",
+            "key": "JWT_TOKEN",
+            "default": "eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiQ1VTVE9NRVIiLCJ1c2VySWQiOiIxIiwiZW1haWwiOiJhQGEuY29tIiwidXNlcm5hbWUiOiJhbXJpdGEiLCJzdWIiOiJhQGEuY29tIiwiaWF0IjoxNzY1NTM0MzgzLCJleHAiOjE3NjU2MjA3ODN9.Uxnc7Lus3GMJapvVJpf5A6kon4p-t3JT2zzFc6-i6H4"
+        },
+        "elasticsearch_url": {
+            "type": "env",
+            "key": "ELASTICSEARCH_URL",
+            "default": "http://localhost:9200"
+        },
+        "bff_url": {
+            "type": "env",
+            "key": "BFF_URL",
+            "default": "http://localhost:8085"
+        },
+        "fault_bucket_size": {
+            "type": "env",
+            "key": "FAULT_BUCKET_SIZE",
+            "default": 0
+        },
+        "location": {
+            "type": "env",
+            "key": "LOCATION",
+            "default": "Mumbai"
+        },
+        "checkin_date": {
+            "type": "env",
+            "key": "CHECKIN_DATE",
+            "default": "2025-12-06"
+        },
+        "checkout_date": {
+            "type": "env",
+            "key": "CHECKOUT_DATE",
+            "default": "2025-12-08"
+        },
+        "default_bucket_size": {
+            "type": "env",
+            "key": "DEFAULT_BUCKET_SIZE",
+            "default": 65536
+        },"wait_duration": {
+            "type": "env",
+            "key": "WAIT_DURATION",
+            "default": 300
+        }
+    },
+    "method": [
+        {
+            "name": "step-1-check-initial-filters",
+            "type": "action",
+            "provider": {
+                "type": "python",
+                "module": "es_infrastructure_fault",
+                "func": "get_filter",
+                "arguments": {
+                    "token": "${jwt_token}",
+                    "location": "${location}",
+                    "checkin_date": "${checkin_date}",
+                    "checkout_date": "${checkout_date}",
+                    "bff_url": "${bff_url}"
+                }
+            },
+            "pauses": {
+                "after": 1
+            }
+        },
+        {
+            "name": "step-2-get-initial-bucket-size",
+            "type": "action",
+            "provider": {
+                "type": "python",
+                "module": "es_infrastructure_fault",
+                "func": "get_bucket_size",
+                "arguments": {
+                    "elasticsearch_url": "${elasticsearch_url}"
+                }
+            },
+            "pauses": {
+                "after": 1
+            }
+        },
+        {
+            "name": "step-3-inject-bucket-fault",
+            "type": "action",
+            "provider": {
+                "type": "python",
+                "module": "es_infrastructure_fault",
+                "func": "update_bucket_size",
+                "arguments": {
+                    "bucket_size": "${fault_bucket_size}",
+                    "elasticsearch_url": "${elasticsearch_url}"
+                }
+            },
+            "pauses": {
+                "after": 1
+            }
+        },
+        {
+            "name": "step-4-verify-fault-impact",
+            "type": "action",
+            "provider": {
+                "type": "python",
+                "module": "es_infrastructure_fault",
+                "func": "get_filter",
+                "arguments": {
+                    "token": "${jwt_token}",
+                    "location": "${location}",
+                    "bff_url": "${bff_url}",
+                    "checkin_date": "${checkin_date}",
+                    "checkout_date": "${checkout_date}"
+                }
+            },
+            "pauses": {
+                "after": "${wait_duration}"
+            }
+        }
+    ],
+    "rollbacks": [
+        {
+            "name": "rollback-restore-bucket-size",
+            "type": "action",
+            "provider": {
+                "type": "python",
+                "module": "es_infrastructure_fault",
+                "func": "update_bucket_size",
+                "arguments": {
+                    "bucket_size": "${default_bucket_size}",
+                    "elasticsearch_url": "${elasticsearch_url}"
+                }
+            },
+            "pauses": {
+                "after": 2
+            }
+        }
+    ]
+}

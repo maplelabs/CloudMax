@@ -1,0 +1,76 @@
+{
+    "version": "1.0.0",
+    "title": "Postgres Max Connections Chaos Experiment",
+    "description": "Active Database connection increases more than the threshold. So all APIs that fetch or write data to/from postgres DB fails as connection limit has reached.",
+    "tags": [
+        "postgres-fault",
+        "max_connections",
+        "chaos-engineering",
+        "docker"
+    ],
+    "method": [
+        {
+            "name": "set-max-connections",
+            "type": "action",
+            "provider": {
+                "type": "python",
+                "module": "postgres_max_conn_fault",
+                "func": "set_max_connections",
+                "arguments": {
+                    "max_conn": 10
+                }
+            }
+        },
+        {
+            "name": "restart-postgres",
+            "type": "action",
+            "provider": {
+                "type": "python",
+                "module": "postgres_max_conn_fault",
+                "func": "restart_postgres",
+                "arguments": {
+                    "container_name": "hotel_postgres"
+                }
+            }
+        },
+        {
+            "name": "simulate-max-connections",
+            "type": "action",
+            "provider": {
+                "type": "python",
+                "module": "postgres_max_conn_fault",
+                "func": "simulate_max_connections",
+                "arguments": {
+                    "max_conn": 15,
+                    "hold_time": 300
+                }
+            }
+        }
+    ],
+    "rollbacks": [
+        {
+            "name": "restore-max-connections",
+            "type": "action",
+            "provider": {
+                "type": "python",
+                "module": "postgres_max_conn_fault",
+                "func": "restore_max_connections",
+                "arguments": {
+                    "default_conn": 100
+                }
+            }
+        },
+        {
+            "name": "restart-postgres-rollback",
+            "type": "action",
+            "provider": {
+                "type": "python",
+                "module": "postgres_max_conn_fault",
+                "func": "restart_postgres",
+                "arguments": {
+                    "container_name": "hotel_postgres"
+                }
+            }
+        }
+    ]
+}

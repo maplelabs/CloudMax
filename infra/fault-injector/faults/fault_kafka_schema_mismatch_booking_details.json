@@ -1,0 +1,9 @@
+{
+  "dag_id": "hr_kafka_schema_mismatch_booking_details",
+  "task_id": "hr_kafka_schema_mismatch_booking_details",
+  "task_name": "hr_kafka_schema_mismatch_booking_details",
+  "experiment_json": "exp_kafka_schema_mismatch_booking_details.json",
+  "tags": ["severity:medium", "target_system:booking-service", "configured_duration:300"],
+  "description": "On book hotel POST API, first booking information is stored in booking-info table. Then the booking information is put in Kafka topic in booking-service. Currently supported Kafka schema version is V1. But producer puts V2 schema msg in the booking-events topic. So the kafka consumer in booking-post-processing-service rejects the message. Rejected msg gets added in booking-events-dlq topic. Since the message is rejected, booking details does not get stored in booking-details table which leads to 5xx error on GetBookingDetails GET API.",
+  "schedule": "@once"
+}

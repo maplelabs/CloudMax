@@ -1,0 +1,15 @@
+{
+    "database": {
+    "host": "airflow-postgres",
+    "port": 5432,
+    "database": "airflow"
+    },
+    "sre_api": {
+        "base_url": "http://cloudmax-backend:8000/v1/fault-ledger",
+        "put_base_url": "http://cloudmax-backend:8000/v1/fault-ledger",
+        "timeout": 30
+    },
+    "exclude_workflows": [
+        "continuous_load"
+    ]
+}

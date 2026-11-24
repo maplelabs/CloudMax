@@ -1,0 +1,13 @@
+{
+  "dag_id": "fault_postgres_max_conn",
+  "task_id": "postgres_max_conn_fault_task",
+  "task_name": "postgres_max_conn_fault_name",
+  "experiment_json": "exp_postgres_max_conn.json",
+  "tags": [
+    "severity:medium",
+    "target_system:hotel-postgres",
+    "configured_duration:300"
+  ],
+  "description": "Active Database connection increases more than the threshold. So all APIs that fetch or write data to/from postgres DB fails as connection limit has reached.",
+  "schedule": "@once"
+}

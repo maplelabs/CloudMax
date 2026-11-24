@@ -1,0 +1,13 @@
+{
+  "dag_id": "fault_es_application_index_alias_mismatch",
+  "task_id": "es_application_index_alias_mismatch_id",
+  "task_name": "es_application_index_alias_mismatch_name",
+  "experiment_json": "exp_es_application_index_alias_mismatch.json",
+  "tags": [
+    "severity:medium",
+    "target_system:search-service",
+    "configured_duration:30"
+  ],
+  "description": "Due to an index alias mismatch in Elasticsearch, search-service queries are routed to a non-existent or incorrect index. As a result, search-service fails to fetch data from Elasticsearch, leading to 5xx errors on search-related APIs in the hotel reservation application.",
+  "schedule": "@once"
+}

@@ -1,0 +1,60 @@
+{
+    "version": "1.0.0",
+    "title": "Postgres Statement Timeout Chaos Experiment",
+    "description": "When the Get Booking Details GET API is called, the underlying database query takes longer than the configured execution time. As a result, PostgreSQL throws a statement timeout error, and the UI displays a 500 Internal Server Error.",
+    "tags": [
+        "postgres-fault",
+        "statement_timeout",
+        "chaos-engineering"
+    ],
+    "method": [
+        {
+            "name": "set-statement-timeout-fault",
+            "type": "action",
+            "provider": {
+                "type": "python",
+                "module": "postgres_statement_timeout",
+                "func": "set_statement_timeout_fault",
+                "arguments": {
+                    "api_url": "http://localhost:8010/app-fault/POSTGRES_STATEMENT_TIMEOUT_FAULT/set"
+                }
+            }
+        },
+        {
+            "name": "set-statement-timeout",
+            "type": "action",
+            "provider": {
+                "type": "python",
+                "module": "postgres_statement_timeout",
+                "func": "set_statement_timeout",
+                "arguments": {
+                    "timeout_ms": 50
+                }
+            }
+        }
+    ],
+    "rollbacks": [
+        {
+            "name": "restore-statement-timeout",
+            "type": "action",
+            "provider": {
+                "type": "python",
+                "module": "postgres_statement_timeout",
+                "func": "restore_statement_timeout",
+                "arguments": {}
+            }
+        },
+        {
+            "name": "reset-statement-timeout-fault",
+            "type": "action",
+            "provider": {
+                "type": "python",
+                "module": "postgres_statement_timeout",
+                "func": "reset_statement_timeout_fault",
+                "arguments": {
+                    "api_url": "http://localhost:8010/app-fault/POSTGRES_STATEMENT_TIMEOUT_FAULT/reset"
+                }
+            }
+        }
+    ]
+}

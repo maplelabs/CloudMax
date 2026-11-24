@@ -1,0 +1,72 @@
+{
+  "version": "1.0.0",
+  "title": "ES Application Index Fault Experiment",
+  "description": "Due to an index alias mismatch in Elasticsearch, search-service queries are routed to a non-existent or incorrect index. As a result, search-service fails to fetch data from Elasticsearch, leading to 5xx errors on search-related APIs in the hotel reservation application.",
+  "tags": [
+    "elasticsearch",
+    "application-fault",
+    "index-fault",
+    "chaos-engineering"
+  ],
+  "configuration": {
+    "base_url": {
+      "type": "env",
+      "key": "BASE_URL",
+      "default": "http://localhost:8010/app-fault"
+    },
+    "fault_name": {
+      "type": "env",
+      "key": "ES_APPLICATION_INDEX",
+      "default": "ES_APPLICATION_INDEX"
+    },
+    "pause_duration": {
+      "type": "env",
+      "key": "pause_duration",
+      "default": 300
+    }
+  },
+      "method": [
+    {
+      "name": "enable-es-application-index-fault",
+      "type": "action",
+      "provider": {
+        "type": "python",
+            "module": "es_application_fault",
+        "func": "update_fault",
+        "arguments": {
+          "fault_flag": true,
+          "api_url": "${base_url}",
+          "fault_name": "${fault_name}"
+        }
+      }
+    },
+    {
+      "name": "wait-while-index-fault-active",
+      "type": "action",
+      "provider": {
+        "type": "python",
+            "module": "es_application_fault",
+        "func": "sleep_for_seconds",
+        "arguments": {
+          "seconds": "${pause_duration}"
+        }
+      }
+    }
+  ],
+  "rollbacks": [
+    {
+      "name": "disable-es-application-index-fault",
+      "type": "action",
+      "provider": {
+        "type": "python",
+            "module": "es_application_fault",
+        "func": "update_fault",
+        "arguments": {
+          "fault_flag": false,
+          "api_url": "${base_url}",
+          "fault_name": "${fault_name}"
+        }
+      }
+    }
+  ]
+}
