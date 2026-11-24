@@ -115,8 +115,14 @@
 # extra containers plus fault-injector's ~11 (Airflow's webserver/scheduler/
 # worker/triggerer/init, Postgres, Redis, and its 4 custom services), since
 # both deploy_hotel_reservation_app and deploy_fault_injector now default to
-# true. Override this workflow's vm_size input to a smaller size (e.g.
-# Standard_B2s) for CloudMax-only demos (both flags false).
+# true. This workflow always uses that Terraform default -- no per-run size
+# override input.
+#
+# Image tags: always :latest for every component (CloudMax's own 5 images,
+# the hotel app's 7, and fault-injector's 4) -- no per-run tag override
+# input. CloudMax's images don't yet have a :verified-style promotion gate
+# published to ACR (see IMG-01), so :latest is the only tag guaranteed to
+# exist; the hotel app/fault-injector pipelines never had one either.
 #
 # Public IP: the demo VM binds a pre-reserved, fixed static IP ("cloudmax-vm-ip",
 # 135.232.101.211 at the time this was set) by default -- see
@@ -141,36 +147,16 @@ on:
         description: "Who this demo is for / who requested it (defaults to the triggering GitHub user)."
         required: false
         type: string
-      image_tag:
-        description: "Image tag to deploy. Defaults to :verified (DEMO-01.7). Override to sha-<gitsha> to test an unreleased build."
-        required: false
-        type: string
-        default: "verified"
       deploy_hotel_reservation_app:
         description: "Also deploy the fault-injector hotel-reservation-application target app alongside CloudMax (from pre-built ACR images, see image-build-push-hotel.yml), networked so both stacks can reach each other. Defaults to true -- set false to skip it and deploy CloudMax alone."
         required: false
         type: boolean
         default: true
-      hotel_image_tag:
-        description: "Image tag to deploy for the hotel app's 7 custom-built services (hotel-nodejs-bff, hotel-search-service, etc.), published by image-build-push-hotel.yml. Defaults to :latest (that pipeline doesn't yet have a :verified-style promotion gate, unlike CloudMax's own images -- see IMG-01). Override to sha-<fault-injector-gitsha> to test a specific build."
-        required: false
-        type: string
-        default: "latest"
       deploy_fault_injector:
         description: "Also deploy the fault-injector chaos engineering platform itself (Airflow-based control plane, see infra/fault-injector/docker-compose.yml) alongside CloudMax and the hotel app, so a user can manually trigger faults against the hotel app from its Fault Gen UI. Defaults to true -- has no effect if deploy_hotel_reservation_app is false (nothing to inject faults into)."
         required: false
         type: boolean
         default: true
-      fault_injector_image_tag:
-        description: "Image tag to deploy for the fault-injector platform's 4 custom-built services (fault-injector-service, fault-injector-notification, etc.), published by image-build-push-hotel.yml. Defaults to :latest, same policy as hotel_image_tag."
-        required: false
-        type: string
-        default: "latest"
-      vm_size:
-        description: "Azure VM size override. Leave blank to use the Terraform default (Standard_F8s_v2, 8 vCPU/16 GiB -- sized for CloudMax + the hotel app, which is deployed by default). Override to a smaller size (e.g. Standard_B2s) when deploy_hotel_reservation_app is false."
-        required: false
-        type: string
-        default: ""
 
 # Least-privilege: read-only repo access, plus the OIDC id-token needed for
 # Azure login. No write access to repo contents/packages is requested.
@@ -297,14 +283,9 @@ jobs:
           # ${VAR:-null} substitution that passed the literal text "null"
           # instead of an actual null value.
           #
-          # vm_size: only pass -var when the input is non-empty, so an unset
-          # input falls through to the module's own default (Standard_F8s_v2)
-          # instead of Terraform erroring on an explicit empty string.
-          if [ -n "${{ inputs.vm_size }}" ]; then
-            terraform apply -auto-approve -var="vm_size=${{ inputs.vm_size }}"
-          else
-            terraform apply -auto-approve
-          fi
+          # Always uses the module's own vm_size default (Standard_F8s_v2) --
+          # no per-run override.
+          terraform apply -auto-approve
 
           echo "public_ip=$(terraform output -raw public_ip_address)" >> "$GITHUB_OUTPUT"
           echo "vm_id=$(terraform output -raw vm_id)" >> "$GITHUB_OUTPUT"
@@ -376,7 +357,7 @@ jobs:
               export REDIS_QUEUE_AUTH=$(az keyvault secret show --vault-name "$KV_NAME" --name redis-queue-auth --query value -o tsv)
               export ACR_REGISTRY="${{ vars.ACR_REGISTRY }}"
               export IMAGE_NAMESPACE="${{ vars.IMAGE_NAMESPACE }}"
-              export IMAGE_TAG="${{ inputs.image_tag }}"
+              export IMAGE_TAG="latest"
 
               docker compose -f docker-compose.prod.yml pull
               docker compose -f docker-compose.prod.yml up -d
@@ -401,7 +382,7 @@ jobs:
           az vm run-command invoke \
             --ids "$VM_ID" \
             --command-id RunShellScript \
-            --parameters "${{ vars.ACR_REGISTRY }}" "${{ vars.IMAGE_NAMESPACE }}" "${{ inputs.hotel_image_tag }}" "${{ steps.apply.outputs.public_ip }}" \
+            --parameters "${{ vars.ACR_REGISTRY }}" "${{ vars.IMAGE_NAMESPACE }}" "latest" "${{ steps.apply.outputs.public_ip }}" \
             --scripts '
               set -eu
               ACR_REGISTRY_ARG="$1"
@@ -479,7 +460,7 @@ jobs:
           az vm run-command invoke \
             --ids "$VM_ID" \
             --command-id RunShellScript \
-            --parameters "${{ vars.ACR_REGISTRY }}" "${{ vars.IMAGE_NAMESPACE }}" "${{ inputs.fault_injector_image_tag }}" \
+            --parameters "${{ vars.ACR_REGISTRY }}" "${{ vars.IMAGE_NAMESPACE }}" "latest" \
             --scripts '
               set -eu
               ACR_REGISTRY_ARG="$1"
@@ -553,7 +534,7 @@ jobs:
           az vm run-command invoke \
             --ids "$VM_ID" \
             --command-id RunShellScript \
-            --parameters "${{ vars.ACR_REGISTRY }}" "${{ vars.IMAGE_NAMESPACE }}" "${{ inputs.hotel_image_tag }}" "${{ steps.apply.outputs.public_ip }}" \
+            --parameters "${{ vars.ACR_REGISTRY }}" "${{ vars.IMAGE_NAMESPACE }}" "latest" "${{ steps.apply.outputs.public_ip }}" \
             --scripts '
               set -eu
               ACR_REGISTRY_ARG="$1"
@@ -718,7 +699,6 @@ jobs:
             echo ""
             echo "- **Demo name:** ${{ inputs.demo_name }}"
             echo "- **Requested by:** ${{ steps.meta.outputs.requested_by }}"
-            echo "- **Image tag:** ${{ inputs.image_tag }}"
             echo "- **URL:** https://${{ steps.apply.outputs.public_ip }}"
           } >> "$GITHUB_STEP_SUMMARY"
 
