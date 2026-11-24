@@ -20,6 +20,16 @@ langgraph-supervisor==0.0.31
 # DeepEval for evaluation (pinned to 3.9.9 for MCP template support)
 deepeval==3.9.9
 
+# deepeval's own telemetry (deepeval.telemetry) calls sentry_sdk.init() with
+# profiles_sample_rate, an option removed in sentry-sdk 3.0.0 (released
+# 2026-11-23, a major rewrite -- see sentry-sdk's 2.x->3.x migration guide).
+# sentry-sdk is an unpinned transitive dependency of deepeval, so builds
+# picked up 3.0.0 as soon as it was published and the backend container
+# started crash-looping on import with "TypeError: Unknown option
+# 'profiles_sample_rate'" (confirmed via a real failed demo deploy). Pin to
+# the last compatible 2.x line until deepeval itself adopts the 3.x API.
+sentry-sdk<3.0.0
+
 # AWS SDK
 boto3>=1.40.14
 
