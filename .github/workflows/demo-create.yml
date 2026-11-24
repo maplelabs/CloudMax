@@ -45,6 +45,40 @@
 # Vault using the VM's own system-assigned managed identity (DEMO-01.2,
 # DEMO-01.5 Sec 4) -- never passed through GitHub Actions or stored on disk
 # outside the VM's own runtime environment.
+#
+# Optional: fault-injector's hotel-reservation-application (deploy_hotel_reservation_app
+# input, default false -- opt-in given its resource footprint) -- a multi-service
+# target app (5 microservices, Postgres, Elasticsearch, Kafka+Zookeeper, plus a
+# full observability stack: Jaeger, Prometheus, Grafana, Loki/Promtail, cAdvisor,
+# and two MCP servers purpose-built for AI-SRE-Ops integration: grafana-mcp-server
+# and jaeger-mcp-server) cloned from the separate, private maplelabs/fault-injector
+# repo and deployed as its own docker-compose project (hotel) alongside the
+# CloudMax stack on the SAME demo VM.
+#
+# Auth for that clone: the workflow's own GITHUB_TOKEN is scoped only to this
+# repo (CloudMax) -- GitHub does not extend it to sibling repos in the same org,
+# even private ones, by default. A separate read-only GitHub PAT with access to
+# maplelabs/fault-injector must therefore be pre-provisioned (manually -- unlike
+# postgres-password/redis-queue-auth, this cannot be auto-generated, since it is
+# a GitHub credential, not an Azure one) as a fault-injector-read-token secret
+# in the cloudmax-kv Key Vault, fetched the same way as the other runtime secrets.
+#
+# Networking: both docker-compose projects keep their own private bridge
+# networks (neither compose file declares an external/shared one, so neither
+# repo takes on a dependency on infrastructure owned by the other). Instead,
+# after both stacks are up, every container from each project is additionally
+# attached to the other project's network via docker network connect
+# --alias <service-name>, so DNS-based service discovery works symmetrically
+# in both directions (e.g. CloudMax's mcp-server/backend can resolve
+# hotel-grafana-mcp/hotel-jaeger-mcp/etc., and the hotel stack's services
+# can resolve cloudmax-backend/cloudmax-mcp-server/etc.).
+#
+# Sizing: the subscription's Standard BS Family quota (see variables.tf's
+# vm_size comment) caps how large a VM this can request. The default
+# Standard_B2s (2 vCPU/4GB) is nowhere near enough for the hotel stack's ~20
+# extra containers on top of CloudMax's own 8 -- override via this workflow's
+# vm_size input (e.g. Standard_B4ms, 4 vCPU/16GB) whenever
+# deploy_hotel_reservation_app is set.
 
 name: Create Demo Environment
 
@@ -64,6 +98,16 @@ on:
         required: false
         type: string
         default: "verified"
+      deploy_hotel_reservation_app:
+        description: "Also clone maplelabs/fault-injector and deploy its hotel-reservation-application target app alongside CloudMax, networked so both stacks can reach each other."
+        required: false
+        type: boolean
+        default: false
+      vm_size:
+        description: "Azure VM size override. Leave blank to use the Terraform default (Standard_B2s). Recommended: Standard_B4ms+ when deploy_hotel_reservation_app is true (quota-permitting -- see variables.tf)."
+        required: false
+        type: string
+        default: ""
 
 # Least-privilege: read-only repo access, plus the OIDC id-token needed for
 # Azure login. No write access to repo contents/packages is requested.
@@ -189,7 +233,15 @@ jobs:
           # (treats "" the same as null), rather than relying on a shell
           # ${VAR:-null} substitution that passed the literal text "null"
           # instead of an actual null value.
-          terraform apply -auto-approve
+          #
+          # vm_size: only pass -var when the input is non-empty, so an unset
+          # input falls through to the module's own default (Standard_B2s)
+          # instead of Terraform erroring on an explicit empty string.
+          if [ -n "${{ inputs.vm_size }}" ]; then
+            terraform apply -auto-approve -var="vm_size=${{ inputs.vm_size }}"
+          else
+            terraform apply -auto-approve
+          fi
 
           echo "public_ip=$(terraform output -raw public_ip_address)" >> "$GITHUB_OUTPUT"
           echo "vm_id=$(terraform output -raw vm_id)" >> "$GITHUB_OUTPUT"
@@ -267,6 +319,83 @@ jobs:
               docker compose -f docker-compose.prod.yml up -d
             '
 
+      - name: Deploy fault-injector hotel-reservation-application (optional)
+        id: deploy_hotel
+        if: ${{ inputs.deploy_hotel_reservation_app }}
+        run: |
+          set -euo pipefail
+          VM_ID="${{ steps.apply.outputs.vm_id }}"
+
+          az vm run-command invoke \
+            --ids "$VM_ID" \
+            --command-id RunShellScript \
+            --parameters "${{ vars.DEMO_KEY_VAULT_ID }}" \
+            --scripts '
+              set -eu
+              KEY_VAULT_ID_ARG="$1"
+              KV_NAME=$(basename "${KEY_VAULT_ID_ARG}")
+
+              az login --identity
+
+              # A separate read-only PAT is required here, NOT the workflow own
+              # GITHUB_TOKEN used for the CloudMax clone above -- that token is
+              # scoped only to the repo the workflow runs in (CloudMax); GitHub
+              # does not extend it to sibling repos in the same org, even
+              # private ones, by default. fault-injector is a separate private
+              # repo, so a PAT with read access to it must be pre-provisioned in
+              # Key Vault (manually -- unlike postgres-password/redis-queue-auth,
+              # this cannot be auto-generated, since it is a GitHub credential,
+              # not an Azure one).
+              FI_TOKEN=$(az keyvault secret show --vault-name "$KV_NAME" --name fault-injector-read-token --query value -o tsv)
+
+              rm -rf /opt/fault-injector
+              git clone --quiet --depth 1 --branch master "https://x-access-token:${FI_TOKEN}@github.com/maplelabs/fault-injector.git" /opt/fault-injector
+              cd /opt/fault-injector/target-applications/hotel-reservation-application
+
+              # The upstream docker-compose.yml (cloned as-is, never edited) binds
+              # its own nginx to host port 80, which collides with cloudmax
+              # frontend own 80/443 binding on this same VM. docker-compose
+              # override.yml is picked up automatically by `docker compose`
+              # alongside docker-compose.yml (no -f flags needed) and only
+              # remaps that one port.
+              echo "services:" > docker-compose.override.yml
+              echo "  nginx:" >> docker-compose.override.yml
+              echo "    ports:" >> docker-compose.override.yml
+              echo "      - \"8090:80\"" >> docker-compose.override.yml
+
+              export COMPOSE_PROJECT_NAME=hotel
+              docker compose build
+              docker compose up -d
+
+              # --- Bridge networking with the CloudMax stack -----------------
+              # Both stacks are independent docker-compose projects, each with
+              # its own private bridge network (cloudmax_cloudmax-network /
+              # hotel_hotel_network). Neither compose file is edited to declare
+              # an external/shared network, so neither repo takes on a
+              # dependency on infrastructure owned by the other. Instead, every
+              # already-running container from both stacks is additionally
+              # attached to the OTHER stack network post-startup, with
+              # --alias set to its own compose service name, so DNS-based
+              # service discovery (e.g. http://hotel-grafana-mcp:8000,
+              # http://cloudmax-mcp-server:8000) works symmetrically in both
+              # directions.
+              CLOUDMAX_NET="cloudmax_cloudmax-network"
+              HOTEL_NET="hotel_hotel_network"
+
+              for svc in $(docker compose ps --services); do
+                CID=$(docker compose ps -q "$svc")
+                if [ -n "$CID" ]; then
+                  docker network connect --alias "$svc" "$CLOUDMAX_NET" "$CID" 2>/dev/null || true
+                fi
+              done
+
+              for CNAME in cloudmax-backend cloudmax-mcp-server cloudmax-code-triage-agent cloudmax-frontend; do
+                if docker ps --format "{{.Names}}" | grep -qx "$CNAME"; then
+                  docker network connect --alias "$CNAME" "$HOTEL_NET" "$CNAME" 2>/dev/null || true
+                fi
+              done
+            '
+
       - name: Health check
         id: health
         run: |
@@ -299,6 +428,17 @@ jobs:
             echo "- **Image tag:** ${{ inputs.image_tag }}"
             echo "- **URL:** https://${{ steps.apply.outputs.public_ip }}"
           } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${{ inputs.deploy_hotel_reservation_app }}" = "true" ]; then
+            {
+              echo ""
+              echo "## fault-injector hotel-reservation-application"
+              echo ""
+              echo "- **URL:** http://${{ steps.apply.outputs.public_ip }}:8090"
+              echo "- Reachable from the CloudMax stack (and vice versa) by container name on both stacks' bridge networks, e.g. \`http://hotel-grafana-mcp:8000\`, \`http://hotel-jaeger-mcp:8000\` from CloudMax, or \`http://cloudmax-backend:8000\` from the hotel stack."
+              echo "- Internal-only (not exposed via NSG): Grafana, Jaeger UI, Prometheus, Loki, and the rest of the observability stack -- inspect via \`az vm run-command\` on \`${{ steps.apply.outputs.vm_id }}\`."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Azure logout
         if: always()

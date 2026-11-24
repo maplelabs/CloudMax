@@ -79,6 +79,27 @@ resource "azurerm_network_security_group" "demo" {
     destination_address_prefix = "*"
   }
 
+  # fault-injector's hotel-reservation-application (optional, see DEMO-01.3's
+  # demo-create.yml `deploy_hotel_reservation_app` input) publishes its own
+  # nginx entrypoint on host port 8090 (remapped from its upstream default of
+  # 80, which would otherwise collide with cloudmax-frontend's own 80/443
+  # binding on this same VM -- see docker-compose.override.yml written by
+  # that workflow's deploy step). Only this single entrypoint is exposed;
+  # its internal observability stack (Grafana/Jaeger/Prometheus/etc.) stays
+  # VM-internal, reachable only via `az vm run-command`, consistent with the
+  # no-direct-SSH posture below.
+  security_rule {
+    name                       = "allow-hotel-reservation-app"
+    priority                   = 120
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "8090"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+
   # No SSH rule by design — management access is via `az vm run-command`,
   # not direct inbound SSH (DEMO-01.2 acceptance criteria).
 }
