@@ -1,0 +1,142 @@
+{
+  "id": null,
+  "uid": "logs-dashboard",
+  "title": "Hotel Services Logs Dashboard",
+  "tags": ["logs", "services", "monitoring"],
+  "timezone": "browser",
+  "editable": true,
+  "refresh": "5s",
+  "schemaVersion": 30,
+  "style": "dark",
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Service Logs",
+      "type": "logs",
+      "datasource": "Loki",
+      "targets": [
+        {
+          "expr": "{service=\"$service\"} | json",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": false,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "displayMode": "list"
+          }
+        }
+      },
+      "gridPos": {"h": 20, "w": 24, "x": 0, "y": 0}
+    },
+    {
+      "id": 2,
+      "title": "Log Level Distribution",
+      "type": "stat",
+      "datasource": "Loki",
+      "targets": [
+        {
+          "expr": "sum by (level) (count_over_time({service=\"$service\"} | json | level != \"\" [5m]))",
+          "legendFormat": "{{level}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {"mode": "palette-classic"}
+        }
+      },
+      "gridPos": {"h": 6, "w": 12, "x": 0, "y": 20}
+    },
+    {
+      "id": 3,
+      "title": "Error Rate (Last 5m)",
+      "type": "stat",
+      "datasource": "Loki",
+      "targets": [
+        {
+          "expr": "sum(count_over_time({service=\"$service\"} | json | level=\"ERROR\" [5m]))",
+          "legendFormat": "Errors",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 1},
+              {"color": "red", "value": 5}
+            ]
+          }
+        }
+      },
+      "gridPos": {"h": 6, "w": 6, "x": 12, "y": 20}
+    },
+    {
+      "id": 4,
+      "title": "Unique Trace IDs (Last 5m)",
+      "type": "stat",
+      "datasource": "Loki",
+      "targets": [
+        {
+          "expr": "count(count by (trace_id) (count_over_time({service=\"$service\"} | json | trace_id != \"\" [5m])))",
+          "legendFormat": "Traces",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {"mode": "palette-classic"}
+        }
+      },
+      "gridPos": {"h": 6, "w": 6, "x": 18, "y": 20}
+    }
+  ],
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "templating": {
+    "list": [
+      {
+        "name": "service",
+        "type": "query",
+        "query": "label_values(service)",
+        "datasource": "Loki",
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "options": [],
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": false,
+        "skipUrlSync": false,
+        "label": "Service",
+        "refresh": 1
+      }
+    ]
+  },
+  "annotations": {
+    "list": []
+  }
+}
+

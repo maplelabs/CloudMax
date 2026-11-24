@@ -1,0 +1,156 @@
+{
+  "id": null,
+  "uid": "kafka-metrics-dashboard",
+  "title": "Kafka Performance Dashboard",
+  "tags": ["kafka", "monitoring", "messaging"],
+  "timezone": "browser",
+  "editable": true,
+  "refresh": "5s",
+  "schemaVersion": 30,
+  "style": "dark",
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Kafka Brokers",
+      "type": "stat",
+      "datasource": "prometheus",
+      "targets": [
+        {
+          "expr": "kafka_brokers",
+          "legendFormat": "Brokers",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "steps": [
+              {"color": "red", "value": null},
+              {"color": "green", "value": 1}
+            ]
+          }
+        }
+      },
+      "gridPos": {"h": 6, "w": 6, "x": 0, "y": 0}
+    },
+    {
+      "id": 2,
+      "title": "Topics",
+      "type": "stat",
+      "datasource": "prometheus",
+      "targets": [
+        {
+          "expr": "count(count by (topic) (kafka_topic_partitions))",
+          "legendFormat": "Topics",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {"mode": "palette-classic"}
+        }
+      },
+      "gridPos": {"h": 6, "w": 6, "x": 6, "y": 0}
+    },
+    {
+      "id": 3,
+      "title": "Consumer Group Lag",
+      "type": "timeseries",
+      "datasource": "prometheus",
+      "targets": [
+        {
+          "expr": "sum by (consumergroup) (kafka_consumergroup_lag)",
+          "legendFormat": "{{consumergroup}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+    },
+    {
+      "id": 4,
+      "title": "Topic Partition Offsets",
+      "type": "timeseries",
+      "datasource": "prometheus",
+      "targets": [
+        {
+          "expr": "kafka_topic_partition_current_offset{topic=~\"booking-events|booking-events-dlq\"}",
+          "legendFormat": "{{topic}}-{{partition}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 8}
+    },
+    {
+      "id": 5,
+      "title": "Message Rate by Topic",
+      "type": "timeseries",
+      "datasource": "prometheus",
+      "targets": [
+        {
+          "expr": "rate(kafka_topic_partition_current_offset{topic=~\"booking-events|booking-events-dlq\"}[5m])",
+          "legendFormat": "{{topic}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "msgs/sec"
+        }
+      },
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 16}
+    },
+    {
+      "id": 6,
+      "title": "Booking Events DLQ Message Count",
+      "type": "timeseries",
+      "datasource": "prometheus",
+      "targets": [
+        {
+          "expr": "kafka_topic_partition_current_offset{topic=\"booking-events-dlq\"}",
+          "legendFormat": "DLQ Messages",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 1},
+              {"color": "red", "value": 10}
+            ]
+          }
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24}
+    }
+  ],
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  }
+}
+

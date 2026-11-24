@@ -48,20 +48,25 @@
 #
 # Default-on: fault-injector's hotel-reservation-application (deploy_hotel_reservation_app
 # input, default true -- set false to deploy CloudMax alone) -- a multi-service
-# target app (5 microservices, Postgres, Elasticsearch, Kafka+Zookeeper, plus a
-# full observability stack: Jaeger, Prometheus, Grafana, Loki/Promtail, cAdvisor,
-# and two MCP servers purpose-built for AI-SRE-Ops integration: grafana-mcp-server
-# and jaeger-mcp-server) cloned from the separate, private maplelabs/fault-injector
-# repo and deployed as its own docker-compose project (hotel) alongside the
-# CloudMax stack on the SAME demo VM.
+# target app (7 custom-built services, Postgres, Elasticsearch, Kafka+Zookeeper,
+# plus a full observability stack: Jaeger, Prometheus, Grafana, Loki/Promtail,
+# cAdvisor, and two MCP servers purpose-built for AI-SRE-Ops integration:
+# grafana-mcp-server and jaeger-mcp-server) deployed as its own docker-compose
+# project (hotel) alongside the CloudMax stack on the SAME demo VM.
 #
-# Auth for that clone: the workflow's own GITHUB_TOKEN is scoped only to this
-# repo (CloudMax) -- GitHub does not extend it to sibling repos in the same org,
-# even private ones, by default. A separate read-only GitHub PAT with access to
-# maplelabs/fault-injector must therefore be pre-provisioned (manually -- unlike
-# postgres-password/redis-queue-auth, this cannot be auto-generated, since it is
-# a GitHub credential, not an Azure one) as a fault-injector-read-token secret
-# in the cloudmax-kv Key Vault, fetched the same way as the other runtime secrets.
+# This VM never clones or reads the private maplelabs/fault-injector repo at
+# all. The 7 custom-built services (nodejs-bff, search-service, etc.) are
+# pre-built and published to ACR by the separate image-build-push-hotel.yml
+# pipeline (which does need read access to that repo, via a repo secret,
+# FAULT_INJECTOR_READ_TOKEN -- a fine-grained, read-only PAT, used only at
+# build time inside that workflow's own runner, never stored in Key Vault or
+# on any VM). The compose file itself (with image: refs instead of build:
+# blocks) plus its config/database-init/dashboard assets are vendored into
+# THIS repo under infra/hotel-app/ -- see that directory's docker-compose.yml
+# header comment for the exact adaptations made. This demo VM only needs
+# `az acr login` (OIDC, already set up for CloudMax's own images) plus
+# `docker compose pull` -- the same no-PAT-on-the-VM posture as the CloudMax
+# deploy step above.
 #
 # Networking: both docker-compose projects keep their own private bridge
 # networks (neither compose file declares an external/shared one, so neither
@@ -108,10 +113,15 @@ on:
         type: string
         default: "verified"
       deploy_hotel_reservation_app:
-        description: "Also clone maplelabs/fault-injector and deploy its hotel-reservation-application target app alongside CloudMax, networked so both stacks can reach each other. Defaults to true -- set false to skip it and deploy CloudMax alone."
+        description: "Also deploy the fault-injector hotel-reservation-application target app alongside CloudMax (from pre-built ACR images, see image-build-push-hotel.yml), networked so both stacks can reach each other. Defaults to true -- set false to skip it and deploy CloudMax alone."
         required: false
         type: boolean
         default: true
+      hotel_image_tag:
+        description: "Image tag to deploy for the hotel app's 7 custom-built services (hotel-nodejs-bff, hotel-search-service, etc.), published by image-build-push-hotel.yml. Defaults to :latest (that pipeline doesn't yet have a :verified-style promotion gate, unlike CloudMax's own images -- see IMG-01). Override to sha-<fault-injector-gitsha> to test a specific build."
+        required: false
+        type: string
+        default: "latest"
       vm_size:
         description: "Azure VM size override. Leave blank to use the Terraform default (Standard_F8s_v2, 8 vCPU/16 GiB -- sized for CloudMax + the hotel app, which is deployed by default). Override to a smaller size (e.g. Standard_B2s) when deploy_hotel_reservation_app is false."
         required: false
@@ -328,63 +338,51 @@ jobs:
               docker compose -f docker-compose.prod.yml up -d
             '
 
-      - name: Deploy fault-injector hotel-reservation-application (optional)
+      - name: Deploy hotel-reservation-application (optional)
         id: deploy_hotel
         if: ${{ inputs.deploy_hotel_reservation_app }}
         run: |
           set -euo pipefail
           VM_ID="${{ steps.apply.outputs.vm_id }}"
 
+          # No git clone of the private fault-injector repo on the VM at all
+          # anymore -- its 7 custom-built services are pre-built and
+          # published to ACR by image-build-push-hotel.yml, and the compose
+          # file + its config/database-init/dashboard assets are vendored
+          # into THIS repo under infra/hotel-app/ (already present in
+          # /opt/cloudmax from the CloudMax deploy step above, same
+          # checkout). This removes the need for the fault-injector-read-token
+          # Key Vault secret entirely (previously fetched here on every demo
+          # create -- see kv-bootstrap-secrets.yml's history).
           az vm run-command invoke \
             --ids "$VM_ID" \
             --command-id RunShellScript \
-            --parameters "${{ vars.DEMO_KEY_VAULT_ID }}" \
+            --parameters "${{ vars.ACR_REGISTRY }}" "${{ vars.IMAGE_NAMESPACE }}" "${{ inputs.hotel_image_tag }}" "${{ steps.apply.outputs.public_ip }}" \
             --scripts '
               set -eu
-              KEY_VAULT_ID_ARG="$1"
-              KV_NAME=$(basename "${KEY_VAULT_ID_ARG}")
+              ACR_REGISTRY_ARG="$1"
+              IMAGE_NAMESPACE_ARG="$2"
+              HOTEL_IMAGE_TAG_ARG="$3"
+              PUBLIC_IP_ARG="$4"
+              if [ -z "${IMAGE_NAMESPACE_ARG}" ]; then
+                IMAGE_NAMESPACE_ARG="cloudmax"
+              fi
 
               az login --identity
 
-              # A separate read-only PAT is required here, NOT the workflow own
-              # GITHUB_TOKEN used for the CloudMax clone above -- that token is
-              # scoped only to the repo the workflow runs in (CloudMax); GitHub
-              # does not extend it to sibling repos in the same org, even
-              # private ones, by default. fault-injector is a separate private
-              # repo, so a PAT with read access to it must be pre-provisioned in
-              # Key Vault (manually -- unlike postgres-password/redis-queue-auth,
-              # this cannot be auto-generated, since it is a GitHub credential,
-              # not an Azure one).
-              FI_TOKEN=$(az keyvault secret show --vault-name "$KV_NAME" --name fault-injector-read-token --query value -o tsv)
+              ACR_NAME=$(echo "${ACR_REGISTRY_ARG}" | cut -d"." -f1)
+              az acr login --name "$ACR_NAME"
 
-              rm -rf /opt/fault-injector
-              git clone --quiet --depth 1 --branch master "https://x-access-token:${FI_TOKEN}@github.com/maplelabs/fault-injector.git" /opt/fault-injector
-              cd /opt/fault-injector/target-applications/hotel-reservation-application
-
-              # The upstream docker-compose.yml (cloned as-is, never edited) binds
-              # its own nginx to host port 80, which collides with cloudmax
-              # frontend own 80/443 binding on this same VM. docker-compose
-              # override.yml is picked up automatically by `docker compose`
-              # alongside docker-compose.yml (no -f flags needed) and only
-              # remaps that one port.
-              #
-              # The "!override" merge tag on the ports key is required --
-              # confirmed via a real failed deploy where a plain ports list
-              # here only ADDED the 8090:80 mapping alongside the upstream
-              # file own 80:80 one (Compose merges ports lists across files
-              # by unique entry, it does not replace them), so hotel-nginx
-              # still also tried to bind host port 80 and collided with
-              # cloudmax-frontend ("port is already allocated"). !override
-              # forces this override file version to fully replace the base
-              # ports list instead of merging into it (Compose Spec,
-              # supported by this VM's Compose 2.40.3).
-              echo "services:" > docker-compose.override.yml
-              echo "  nginx:" >> docker-compose.override.yml
-              echo "    ports: !override" >> docker-compose.override.yml
-              echo "      - \"8090:80\"" >> docker-compose.override.yml
+              cd /opt/cloudmax/infra/hotel-app
 
               export COMPOSE_PROJECT_NAME=hotel
-              docker compose build
+              export ACR_REGISTRY="${ACR_REGISTRY_ARG}"
+              export IMAGE_NAMESPACE="${IMAGE_NAMESPACE_ARG}"
+              export HOTEL_IMAGE_TAG="${HOTEL_IMAGE_TAG_ARG}"
+              export PUBLIC_IP="${PUBLIC_IP_ARG}"
+              export TRACING_ENABLED="true"
+
+              docker compose pull
               docker compose up -d
 
               # --- Bridge networking with the CloudMax stack -----------------

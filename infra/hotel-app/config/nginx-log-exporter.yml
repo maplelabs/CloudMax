@@ -1,0 +1,28 @@
+listen:
+  port: 4040
+  address: "0.0.0.0"
+
+consul:
+  enable: false
+
+namespaces:
+  - name: nginx
+    format: "$remote_addr - $remote_user [$time_local] \"$request\" $status $body_bytes_sent \"$http_referer\" \"$http_user_agent\" rt=$request_time"
+    source:
+      files:
+        - /var/log/nginx/access.log
+    namespace_labels:
+      service: "nginx"
+      environment: "production"
+    metrics_override:
+      prefix: nginx
+    relabel_configs:
+      - source_labels: [request]
+        regex: '^(\w+)\s+(.+)\s+(HTTP/[\d\.]+)$'
+        target_label: method
+        replacement: '${1}'
+      - source_labels: [request]
+        regex: '^(\w+)\s+(.+)\s+(HTTP/[\d\.]+)$'
+        target_label: path
+        replacement: '${2}'
+    histogram_buckets: [.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10]
