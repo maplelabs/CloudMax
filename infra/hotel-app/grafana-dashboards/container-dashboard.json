@@ -1,0 +1,164 @@
+{
+  "id": null,
+  "uid": "container-metrics-dashboard",
+  "title": "Container Performance Dashboard",
+  "tags": ["containers", "docker", "monitoring"],
+  "timezone": "browser",
+  "editable": true,
+  "refresh": "5s",
+  "schemaVersion": 30,
+  "style": "dark",
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Container Memory Usage",
+      "type": "timeseries",
+      "datasource": "prometheus",
+      "targets": [
+        {
+          "expr": "container_memory_usage_bytes{container_label_com_docker_compose_service=~\"kafka|postgres|elasticsearch|frontend|nodejs-bff|search-service|booking-service|booking-post-processing-service|invoice-service\"} / 1024 / 1024",
+          "legendFormat": "{{container_label_com_docker_compose_service}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "MB"
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+    },
+    {
+      "id": 2,
+      "title": "Container Memory Limits",
+      "type": "timeseries",
+      "datasource": "prometheus",
+      "targets": [
+        {
+          "expr": "container_spec_memory_limit_bytes{container_label_com_docker_compose_service=~\"kafka|postgres|elasticsearch|frontend|nodejs-bff|search-service|booking-service|booking-post-processing-service|invoice-service\"} / 1024 / 1024",
+          "legendFormat": "{{container_label_com_docker_compose_service}}_limit",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "MB"
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+    },
+    {
+      "id": 3,
+      "title": "Container CPU Usage",
+      "type": "timeseries",
+      "datasource": "prometheus",
+      "targets": [
+        {
+          "expr": "sum(rate(container_cpu_usage_seconds_total{container_label_com_docker_compose_service=~\"kafka|postgres|elasticsearch|frontend|nodejs-bff|search-service|booking-service|booking-post-processing-service|invoice-service\"}[5m])) by (container_label_com_docker_compose_service) * 100",
+          "legendFormat": "{{container_label_com_docker_compose_service}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+    },
+    {
+      "id": 4,
+      "title": "Container CPU Limits",
+      "type": "timeseries",
+      "datasource": "prometheus",
+      "targets": [
+        {
+          "expr": "container_spec_cpu_quota{container_label_com_docker_compose_service=~\"kafka|postgres|elasticsearch|frontend|nodejs-bff|search-service|booking-service|booking-post-processing-service|invoice-service\"} / container_spec_cpu_period{container_label_com_docker_compose_service=~\"kafka|postgres|elasticsearch|frontend|nodejs-bff|search-service|booking-service|booking-post-processing-service|invoice-service\"}",
+          "legendFormat": "{{container_label_com_docker_compose_service}}_cpu_limit",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 2
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
+    },
+    {
+      "id": 5,
+      "title": "Container Network RX (Receive)",
+      "type": "timeseries",
+      "datasource": "prometheus",
+      "targets": [
+        {
+          "expr": "sum(rate(container_network_receive_bytes_total{container_label_com_docker_compose_service=~\"kafka|postgres|elasticsearch|frontend|nodejs-bff|search-service|booking-service|booking-post-processing-service|invoice-service\"}[5m])) by (container_label_com_docker_compose_service)",
+          "legendFormat": "{{container_label_com_docker_compose_service}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps"
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16}
+    },
+    {
+      "id": 6,
+      "title": "Container Network TX (Transmit)",
+      "type": "timeseries",
+      "datasource": "prometheus",
+      "targets": [
+        {
+          "expr": "sum(rate(container_network_transmit_bytes_total{container_label_com_docker_compose_service=~\"kafka|postgres|elasticsearch|frontend|nodejs-bff|search-service|booking-service|booking-post-processing-service|invoice-service\"}[5m])) by (container_label_com_docker_compose_service)",
+          "legendFormat": "{{container_label_com_docker_compose_service}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps"
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16}
+    },
+    {
+      "id": 7,
+      "title": "Container Restarts",
+      "type": "timeseries",
+      "datasource": "prometheus",
+      "targets": [
+        {
+          "expr": "increase(container_start_time_seconds{container_label_com_docker_compose_service=~\"kafka|postgres|elasticsearch|frontend|nodejs-bff|search-service|booking-service|booking-post-processing-service|invoice-service\"}[5m])",
+          "legendFormat": "{{container_label_com_docker_compose_service}}_restarts",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        }
+      },
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 24}
+    }
+  ],
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  }
+}
+
+
+
+

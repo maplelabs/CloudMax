@@ -1,0 +1,131 @@
+# Builds and publishes the fault-injector hotel-reservation-application's 7
+# custom-built services to ACR, so demo-create.yml's hotel app deploy step
+# never needs to clone or read the private maplelabs/fault-injector repo on
+# the demo VM itself (previously done via a GitHub PAT stored in
+# cloudmax-kv's fault-injector-read-token secret -- removed, see
+# kv-bootstrap-secrets.yml).
+#
+# Only 7 of the ~24 services in that app's docker-compose.yml have a
+# `build:` block; the rest (postgres, elasticsearch, kafka, nginx, grafana,
+# jaeger, prometheus, loki, promtail, cadvisor, the exporters, and the two
+# MCP servers) already use public images and are untouched/unpublished here.
+#
+# Authentication:
+#   - FAULT_INJECTOR_READ_TOKEN (repo secret, NOT Key Vault): a read-only,
+#     fine-grained GitHub PAT scoped to just maplelabs/fault-injector, used
+#     solely for actions/checkout here, at build time, inside this runner.
+#     This is a deliberately smaller exposure than the previous design: no
+#     VM ever holds this credential, it is not re-fetched on every demo
+#     create, and it never leaves GitHub Actions' own secret store. Someone
+#     with access to maplelabs/fault-injector needs to generate this PAT and
+#     add it via repo Settings -> Secrets and variables -> Actions, or
+#     `gh secret set FAULT_INJECTOR_READ_TOKEN -R maplelabs/CloudMax`.
+#   - Azure OIDC (azure/login, same CloudMaX-App-GitHub-Int identity as
+#     image-build-push.yml) for `az acr login` -- no registry password
+#     stored, same as CloudMax's own images.
+#
+# Manually triggered only -- the hotel app has its own release cadence in
+# its own repo, independent of CloudMax's push-to-main. Re-run this whenever
+# fault-injector's hotel-reservation-application source changes and you want
+# demo-create.yml's hotel app deploy to pick up the update (it always pulls
+# the `:latest` tag from these ACR images, pinned via demo-create.yml's
+# HOTEL_IMAGE_TAG, mirroring the `:latest`/`:sha-<gitsha>` policy already
+# used for CloudMax's own images in image-build-push.yml).
+
+name: Build and Push Hotel App Images
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: image-build-push-hotel
+  cancel-in-progress: false
+
+jobs:
+  build-and-push:
+    name: Build & push hotel-${{ matrix.component.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        component:
+          - name: nodejs-bff
+            path: src/backend/services/nodejs-bff
+          - name: search-service
+            path: src/backend/services/search_service
+          - name: authentication-service
+            path: src/backend/services/authentication
+          - name: booking-service
+            path: src/backend/services/booking_service
+          - name: frontend
+            path: src/frontend/hotel-reservation-ui
+          - name: invoice-service
+            path: src/backend/services/invoice-service
+          - name: booking-post-processing-service
+            path: src/backend/services/booking-post-processing-service
+    steps:
+      - name: Fail fast if FAULT_INJECTOR_READ_TOKEN is not configured
+        if: ${{ secrets.FAULT_INJECTOR_READ_TOKEN == '' }}
+        run: |
+          echo "::error::Repository secret FAULT_INJECTOR_READ_TOKEN is not set. Add a read-only, fine-grained GitHub PAT scoped to maplelabs/fault-injector before this pipeline can check it out."
+          exit 1
+
+      - name: Fail fast if registry is not configured
+        if: ${{ vars.ACR_REGISTRY == '' }}
+        run: |
+          echo "::error::Repository variable ACR_REGISTRY is not set. Configure it before this pipeline can push images."
+          exit 1
+
+      - name: Checkout fault-injector
+        uses: actions/checkout@v4
+        with:
+          repository: maplelabs/fault-injector
+          ref: master
+          token: ${{ secrets.FAULT_INJECTOR_READ_TOKEN }}
+          path: fault-injector
+
+      - name: Resolve image metadata
+        id: meta
+        working-directory: fault-injector
+        run: |
+          SHORT_SHA="$(git rev-parse --short=12 HEAD)"
+          NAMESPACE="${{ vars.IMAGE_NAMESPACE }}"
+          if [ -z "$NAMESPACE" ]; then
+            NAMESPACE="cloudmax"
+          fi
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "image_repo=${{ vars.ACR_REGISTRY }}/${NAMESPACE}/hotel-${{ matrix.component.name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Log in to ACR via az acr login (no stored registry password)
+        run: |
+          ACR_NAME="$(echo "${{ vars.ACR_REGISTRY }}" | cut -d'.' -f1)"
+          az acr login --name "${ACR_NAME}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push hotel-${{ matrix.component.name }}
+        uses: docker/build-push-action@v6
+        with:
+          context: fault-injector/target-applications/hotel-reservation-application/${{ matrix.component.path }}
+          file: fault-injector/target-applications/hotel-reservation-application/${{ matrix.component.path }}/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image_repo }}:sha-${{ steps.meta.outputs.short_sha }}
+            ${{ steps.meta.outputs.image_repo }}:latest
+          provenance: false
+
+      - name: Azure logout
+        if: always()
+        run: az logout || true
