@@ -59,3 +59,309 @@ groups:
                     type: gt
                     params:
                       - 0
+
+  # --- Second group: broader fault-detection coverage previously
+  # configured by hand in the live Grafana UI (exported as
+  # alert-rules.yaml at the repo root, which is a raw Grafana export --
+  # not usable directly, since it embeds a live instance's
+  # auto-generated datasource uid (P1809F7CD0C75ACF3), per-rule UI-only
+  # fields, and non-standalone classic-condition syntax). Re-authored
+  # here as plain file-provisioning input: same PromQL expressions and
+  # thresholds, repointed at our fixed prometheus-ds uid, trimmed to
+  # only the fields provisioning actually needs, and routed through the
+  # same cloudmax-webhook contact point. isPaused is preserved exactly
+  # as it was left in the live instance (3 of these were intentionally
+  # paused -- likely superseded/being iterated on alongside the
+  # nginx-5xx-high rule above).
+  - orgId: 1
+    name: hotel-reservation-application-alerts
+    folder: Hotel Reservation Application
+    interval: 1m
+    rules:
+      - uid: docker-container-restart
+        title: 'docker container restart'
+        condition: C
+        for: 1m
+        noDataState: NoData
+        execErrState: Error
+        isPaused: false
+        notification_settings:
+          receiver: cloudmax-webhook
+        data:
+          - refId: A
+            datasourceUid: prometheus-ds
+            relativeTimeRange:
+              from: 600
+              to: 0
+            model:
+              refId: A
+              expr: 'resets(container_cpu_usage_seconds_total{container_label_com_docker_compose_service=~"zookeeper|kafka|postgres|elasticsearch|frontend|nodejs-bff|search-service|booking-service|booking-post-processing-service|invoice-service",cpu="total"}[5m])'
+              instant: true
+              range: false
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 0
+
+      - uid: search-service-rapid-memory-growth
+        title: search service rapid memory growth
+        condition: C
+        for: 1m
+        noDataState: NoData
+        execErrState: Error
+        isPaused: false
+        notification_settings:
+          receiver: cloudmax-webhook
+        data:
+          - refId: A
+            datasourceUid: prometheus-ds
+            relativeTimeRange:
+              from: 600
+              to: 0
+            model:
+              refId: A
+              expr: 'rate(container_memory_usage_bytes{container_label_com_docker_compose_service="search-service"}[5m])'
+              instant: true
+              range: false
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 700000
+
+      - uid: search-service-high-memory-usage
+        title: search service high memory usage
+        condition: C
+        for: 1m
+        noDataState: NoData
+        execErrState: Error
+        isPaused: false
+        notification_settings:
+          receiver: cloudmax-webhook
+        data:
+          - refId: A
+            datasourceUid: prometheus-ds
+            relativeTimeRange:
+              from: 600
+              to: 0
+            model:
+              refId: A
+              expr: 'container_memory_usage_bytes{container_label_com_docker_compose_service="search-service"}'
+              instant: true
+              range: false
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 104857600
+
+      - uid: kafka-dlq-message-growth
+        title: 'kafka dlq message growth'
+        condition: C
+        for: 1m
+        noDataState: NoData
+        execErrState: Error
+        isPaused: false
+        notification_settings:
+          receiver: cloudmax-webhook
+        data:
+          - refId: A
+            datasourceUid: prometheus-ds
+            relativeTimeRange:
+              from: 600
+              to: 0
+            model:
+              refId: A
+              expr: 'increase(kafka_topic_partition_current_offset{topic="booking-events-dlq"}[5m])'
+              instant: true
+              range: false
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 0
+
+      - uid: postgres-sharerowexclusive-lock
+        title: 'postgres share row exclusive lock detected'
+        condition: C
+        for: 1m
+        noDataState: NoData
+        execErrState: Error
+        isPaused: false
+        notification_settings:
+          receiver: cloudmax-webhook
+        data:
+          - refId: A
+            datasourceUid: prometheus-ds
+            relativeTimeRange:
+              from: 600
+              to: 0
+            model:
+              refId: A
+              expr: 'pg_locks_count{datname="hotel_booking_db",mode="sharerowexclusivelock"}'
+              instant: true
+              range: false
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 0
+
+      - uid: nginx-error
+        title: 'nginx error'
+        condition: C
+        for: 1m
+        noDataState: NoData
+        execErrState: Error
+        isPaused: true
+        notification_settings:
+          receiver: cloudmax-webhook
+        data:
+          - refId: A
+            datasourceUid: prometheus-ds
+            relativeTimeRange:
+              from: 600
+              to: 0
+            model:
+              refId: A
+              expr: 'sum(rate(nginx_http_response_count_total{method="",path="",status=~"5.."}[5m])) > 0'
+              instant: true
+              range: false
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 0
+
+      - uid: high-api-failure
+        title: high api failure
+        condition: C
+        for: 1m
+        noDataState: NoData
+        execErrState: Error
+        isPaused: true
+        notification_settings:
+          receiver: cloudmax-webhook
+        data:
+          - refId: A
+            datasourceUid: prometheus-ds
+            relativeTimeRange:
+              from: 600
+              to: 0
+            model:
+              refId: A
+              expr: 'sum by (instance, job, namespace, pod) (rate(nginx_http_response_count_total{status=~"5.."}[5m])) > 0.5'
+              instant: true
+              range: false
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 0
+
+      - uid: high-consumer-lag-detection
+        title: High Consumer Lag detection
+        condition: C
+        for: 1m
+        noDataState: NoData
+        execErrState: Error
+        isPaused: false
+        notification_settings:
+          receiver: cloudmax-webhook
+        data:
+          - refId: A
+            datasourceUid: prometheus-ds
+            relativeTimeRange:
+              from: 600
+              to: 0
+            model:
+              refId: A
+              expr: 'rate(kafka_consumergroup_lag{topic="booking-events"}[5m])'
+              instant: true
+              range: false
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gte
+                    params:
+                      - 10
+
+      - uid: nginx-high-http-error-count
+        title: Nginx_High_HTTP_Error_Count
+        condition: C
+        for: 1m
+        noDataState: NoData
+        execErrState: Error
+        isPaused: true
+        notification_settings:
+          receiver: cloudmax-webhook
+        data:
+          - refId: A
+            datasourceUid: prometheus-ds
+            relativeTimeRange:
+              from: 600
+              to: 0
+            model:
+              refId: A
+              expr: 'sum(increase(nginx_http_response_count_total{method="",path="",status=~"5.."}[5m])) > 0'
+              instant: true
+              range: false
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 10
