@@ -578,6 +578,39 @@ jobs:
               docker compose pull
               docker compose up -d
 
+              # --- Seed the Elasticsearch "hotels" index -----------------
+              # Nothing in this stack (no compose service, init script, or
+              # app code) ever creates or populates the "hotels" index.
+              # Confirmed via a real failure: GET /api/hotels/search returned
+              # HTTP 500 from search-service with
+              # elasticsearch.NotFoundError: index_not_found_exception, "no
+              # such index [hotels]" -- the ES cluster had zero indices.
+              # Idempotent: skips entirely if the index already exists (e.g.
+              # a snapshot-restored VM that already has it), so this never
+              # clobbers real booking-driven writes to the index.
+              echo "Waiting for Elasticsearch to be ready..."
+              for i in $(seq 1 30); do
+                if curl -fsS -m 5 "http://localhost:9200/_cluster/health" >/dev/null 2>&1; then
+                  break
+                fi
+                sleep 5
+              done
+
+              ES_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:9200/hotels")
+              if [ "$ES_STATUS" = "404" ]; then
+                echo "hotels index not found -- creating and seeding it."
+                curl -fsS -X PUT "http://localhost:9200/hotels" \
+                  -H "Content-Type: application/json" \
+                  --data-binary @elasticsearch/hotels_mapping.json
+                curl -fsS -X POST "http://localhost:9200/_bulk" \
+                  -H "Content-Type: application/x-ndjson" \
+                  --data-binary @elasticsearch/hotels_seed.ndjson >/dev/null
+                curl -fsS -X POST "http://localhost:9200/hotels/_refresh" >/dev/null
+                echo "hotels index seeded."
+              else
+                echo "hotels index already exists (HTTP $ES_STATUS) -- leaving it untouched."
+              fi
+
               # --- Bridge networking with the CloudMax stack -----------------
               # Both stacks are independent docker-compose projects, each with
               # its own private bridge network (cloudmax_cloudmax-network /
