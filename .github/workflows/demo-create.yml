@@ -581,39 +581,39 @@ jobs:
               # --- Bridge networking with the CloudMax stack -----------------
               # Both stacks are independent docker-compose projects, each with
               # its own private bridge network (cloudmax_cloudmax-network /
-              # hotel_hotel_network). Neither compose file is edited to declare
-              # an external/shared network, so neither repo takes on a
-              # dependency on infrastructure owned by the other. Instead, every
-              # already-running container from both stacks is additionally
-              # attached to the OTHER stack network post-startup, relying on
-              # Docker's own automatic per-network DNS registration of each
-              # container's container_name (no explicit --alias needed) for
-              # DNS-based service discovery (e.g. http://hotel-grafana-mcp:8000,
-              # http://cloudmax-mcp-server:8000) to work symmetrically in both
-              # directions.
+              # hotel_hotel_network). Only ONE direction is actually needed:
+              # hotel-grafana's alert contact point
+              # (config/grafana/alerting/contactpoints.yml) posts webhooks to
+              # http://cloudmax-backend:8000/v1/webhooks/alerts/grafana, so
+              # cloudmax-backend (and friends) must be reachable BY NAME from
+              # hotel_hotel_network. fault-notification's reverse POST to
+              # cloudmax-backend:8000/v1/fault-ledger is handled separately
+              # below. Nothing requires the OTHER direction (hotel services
+              # reachable from cloudmax's network) -- Grafana/Jaeger MCP
+              # connections use the VM's public IP, not internal DNS (see
+              # seed_mcp_config.py), so that direction was pure liability.
               #
-              # IMPORTANT: do NOT pass --alias <compose-service-name> here.
-              # Confirmed via a real failure: both compose files happen to
-              # name a service literally "postgres" (cloudmax's own Postgres
-              # vs. hotel_postgres) and another "frontend" -- aliasing by
-              # compose service name on the shared cloudmax network collided
-              # hotel_postgres's "postgres" alias with cloudmax-postgres's own
-              # "postgres" alias on that same network, making DNS lookups for
-              # "postgres" from cloudmax-backend non-deterministically resolve
-              # to either container and causing intermittent "password
-              # authentication failed for user otelu" errors (right password,
-              # wrong Postgres server). container_name values are already
-              # unique across both compose files, so plain `docker network
-              # connect` (no --alias) is both sufficient and collision-free.
-              CLOUDMAX_NET="cloudmax_cloudmax-network"
+              # REMOVED (previously bridged ALL hotel-app services onto
+              # cloudmax_cloudmax-network): confirmed via a real failure that
+              # this caused a Docker DNS collision. Docker Compose
+              # automatically aliases every service on its OWN network by its
+              # compose SERVICE NAME (not just container_name) -- e.g.
+              # cloudmax-postgres is aliased both "cloudmax-postgres" AND
+              # "postgres" on cloudmax_cloudmax-network, since "postgres" is
+              # its compose service name. The instant ANY hotel-app container
+              # (e.g. hotel-authentication-service-1) also joins
+              # cloudmax_cloudmax-network, it becomes dual-homed, and Docker's
+              # embedded DNS resolver non-deterministically answers its own
+              # "postgres" lookups (meant for hotel_postgres, on its own
+              # hotel_hotel_network) with cloudmax-postgres's IP instead --
+              # same ambiguity for "frontend". This broke real end-user
+              # signup/signin (password authentication failed for user
+              # "postgres" -- right password, wrong Postgres server) with no
+              # workaround possible via --alias, since the collision came from
+              # Compose's own built-in per-network service-name aliasing, not
+              # from this script. The only fix is to not join that network at
+              # all when nothing actually needs it.
               HOTEL_NET="hotel_hotel_network"
-
-              for svc in $(docker compose ps --services); do
-                CID=$(docker compose ps -q "$svc")
-                if [ -n "$CID" ]; then
-                  docker network connect "$CLOUDMAX_NET" "$CID" 2>/dev/null || true
-                fi
-              done
 
               for CNAME in cloudmax-backend cloudmax-mcp-server cloudmax-code-triage-agent cloudmax-frontend; do
                 if docker ps --format "{{.Names}}" | grep -qx "$CNAME"; then
