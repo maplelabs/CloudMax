@@ -120,6 +120,15 @@ groups:
         notification_settings:
           receiver: cloudmax-webhook
         data:
+          # container_memory_usage_bytes is a GAUGE (confirmed live:
+          # `# TYPE container_memory_usage_bytes gauge` from cAdvisor's own
+          # /metrics output), not a counter. rate() assumes a monotonically
+          # increasing counter and treats any decrease as a "reset" --
+          # applying it to a gauge produces meaningless/misleading values
+          # whenever memory usage drops at all between scrapes. deriv()
+          # is the correct PromQL function for a gauge's per-second rate of
+          # change (linear regression over the range, handles decreases
+          # correctly instead of misinterpreting them as counter resets).
           - refId: A
             datasourceUid: prometheus-ds
             relativeTimeRange:
@@ -127,7 +136,7 @@ groups:
               to: 0
             model:
               refId: A
-              expr: 'rate(container_memory_usage_bytes{container_label_com_docker_compose_service="search-service"}[5m])'
+              expr: 'deriv(container_memory_usage_bytes{container_label_com_docker_compose_service="search-service"}[5m])'
               instant: true
               range: false
           - refId: C
@@ -312,6 +321,16 @@ groups:
         notification_settings:
           receiver: cloudmax-webhook
         data:
+          # kafka_consumergroup_lag is a GAUGE (confirmed live:
+          # `# TYPE kafka_consumergroup_lag gauge` from kafka-exporter's own
+          # /metrics output) -- it IS the current lag value, not a counter
+          # of lag events. Wrapping it in rate() computed the per-second
+          # RATE OF CHANGE of lag instead of the lag itself, so a consumer
+          # group permanently stuck hundreds of messages behind (the exact
+          # scenario this alert exists to catch) would sit at rate() ~= 0
+          # and never cross the "gte 10" threshold -- the alert could never
+          # fire for a real, sustained high-lag incident. Query the raw
+          # gauge directly instead.
           - refId: A
             datasourceUid: prometheus-ds
             relativeTimeRange:
@@ -319,7 +338,7 @@ groups:
               to: 0
             model:
               refId: A
-              expr: 'rate(kafka_consumergroup_lag{topic="booking-events"}[5m])'
+              expr: 'kafka_consumergroup_lag{topic="booking-events"}'
               instant: true
               range: false
           - refId: C
