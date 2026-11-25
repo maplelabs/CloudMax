@@ -343,6 +343,32 @@ resource "azapi_resource" "demo_vm" {
             - docker.io
             - docker-compose-v2
             - git
+          # Disable Docker's containerd-snapshotter image store before the
+          # daemon ever starts. Confirmed via a real deployed VM that this
+          # docker.io package version defaults to the containerd-snapshotter
+          # backend (`docker info` -> "driver-type: io.containerd.snapshotter.v1",
+          # no /var/lib/docker/image/overlayfs/layerdb directory at all) --
+          # cAdvisor (all versions through v0.52.1) cannot introspect this
+          # backend: its Docker container handler expects the classic
+          # overlayfs graphdriver layout to resolve each container's
+          # read-write layer, so every container fails with "failed to
+          # identify the read-write layer ID ... no such file or directory",
+          # and NO container ever gets labeled (no `name`, `image`, or
+          # `container_label_*` -- including container_label_com_docker_compose_service),
+          # which is why PromQL queries filtering on those labels return no
+          # data. The classic graphdriver backend (set here) is what cAdvisor
+          # actually supports. Must be written before dockerd's first start
+          # (`systemctl enable --now docker` below) -- changing storage
+          # backends after containers/images already exist under the other
+          # backend is not a safe in-place migration.
+          write_files:
+            - path: /etc/docker/daemon.json
+              content: |
+                {
+                  "features": {
+                    "containerd-snapshotter": false
+                  }
+                }
           runcmd:
             - systemctl enable --now docker
             - curl -sL https://aka.ms/InstallAzureCLIDeb | bash
