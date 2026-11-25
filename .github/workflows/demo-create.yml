@@ -403,10 +403,38 @@ jobs:
           # The seed script itself (infra/cloudmax/scripts/seed_llm_config.py)
           # is already present on the VM from this repo's own git clone
           # (done in the deploy step above) -- no base64 re-embedding needed.
+          #
+          # IMPORTANT: Azure's RunCommand mechanism joins all --parameters
+          # values with spaces and the VM-side shell re-splits on
+          # whitespace -- this happens regardless of how carefully each
+          # value is quoted on the az CLI side (confirmed via a real test:
+          # a single parameter "Azure Anthropic" arrived on the VM as TWO
+          # separate positional args, "Azure" and "Anthropic", silently
+          # shifting every parameter after it by one position and causing
+          # `export: 0.005: bad variable name` further down the script).
+          # So every value below MUST be space-free. LLM_PROVIDER /
+          # EMBEDDING_LLM_PROVIDER repo Variables may be human-friendly
+          # ("Azure Anthropic") -- normalize them here (lowercase, spaces
+          # to hyphens) before they ever reach --parameters. This also
+          # conveniently produces exactly the slug values
+          # (azure-anthropic / azure-openai) seed_llm_config.py's enum
+          # validation expects. Price vars are also stripped of incidental
+          # whitespace for the same reason.
+          LLM_PROVIDER_SLUG=$(echo "${{ vars.LLM_PROVIDER }}" | tr '[:upper:]' '[:lower:]' | tr -s ' ' '-' | xargs)
+          EMBEDDING_PROVIDER_SLUG=$(echo "${{ vars.EMBEDDING_LLM_PROVIDER }}" | tr '[:upper:]' '[:lower:]' | tr -s ' ' '-' | xargs)
+          LLM_PRICE_IN=$(echo "${{ vars.LLM_PRICE_PER_1K_INPUT_TOKENS }}" | tr -d '[:space:]')
+          LLM_PRICE_OUT=$(echo "${{ vars.LLM_PRICE_PER_1K_OUTPUT_TOKENS }}" | tr -d '[:space:]')
+
+          for v in "${{ vars.LLM_ENDPOINT_URL }}" "${{ vars.LLM_MODEL_ID }}" "${{ vars.EMBEDDING_ENDPOINT_URL }}" "${{ vars.EMBEDDING_DEPLOYMENT_NAME }}" "${{ vars.EMBEDDING_API_VERSION }}"; do
+            case "$v" in
+              *" "*) echo "::error::Repo Variable value '$v' contains a space -- Azure RunCommand cannot pass this safely as a positional parameter. Remove the space from this Variable's value." && exit 1 ;;
+            esac
+          done
+
           az vm run-command invoke \
             --ids "$VM_ID" \
             --command-id RunShellScript \
-            --parameters "${{ vars.LLM_PROVIDER }}" "${{ vars.LLM_ENDPOINT_URL }}" "${{ vars.LLM_MODEL_ID }}" "${{ vars.LLM_PRICE_PER_1K_INPUT_TOKENS }}" "${{ vars.LLM_PRICE_PER_1K_OUTPUT_TOKENS }}" "${{ vars.EMBEDDING_LLM_PROVIDER }}" "${{ vars.EMBEDDING_ENDPOINT_URL }}" "${{ vars.EMBEDDING_DEPLOYMENT_NAME }}" "${{ vars.EMBEDDING_API_VERSION }}" "${{ secrets.LLM_API_KEY }}" "${{ secrets.EMBEDDING_API_KEY }}" \
+            --parameters "${LLM_PROVIDER_SLUG}" "${{ vars.LLM_ENDPOINT_URL }}" "${{ vars.LLM_MODEL_ID }}" "${LLM_PRICE_IN}" "${LLM_PRICE_OUT}" "${EMBEDDING_PROVIDER_SLUG}" "${{ vars.EMBEDDING_ENDPOINT_URL }}" "${{ vars.EMBEDDING_DEPLOYMENT_NAME }}" "${{ vars.EMBEDDING_API_VERSION }}" "${{ secrets.LLM_API_KEY }}" "${{ secrets.EMBEDDING_API_KEY }}" \
             --scripts '
               set -eu
               LLM_PROVIDER_ARG="$1"
