@@ -149,10 +149,15 @@ on:
         type: boolean
         default: true
       deploy_fault_injector:
-        description: "Also deploy the fault-injector chaos engineering platform itself (Airflow-based control plane, see infra/fault-injector/docker-compose.yml) alongside CloudMax and the hotel app, so a user can manually trigger faults against the hotel app from its Fault Gen UI. Defaults to true -- has no effect if deploy_hotel_reservation_app is false (nothing to inject faults into)."
+        description: "Also deploy the fault-injector chaos engineering platform itself, alongside CloudMax and the hotel app, so a user can manually trigger faults against the hotel app from its Fault Gen UI. Defaults to true -- has no effect if deploy_hotel_reservation_app is false."
         required: false
         type: boolean
         default: true
+      seed_config_only_vm_name:
+        description: "ADMIN/REPAIR USE ONLY, leave blank for a normal create. If set to an existing demo VM name, skips all provisioning/deploy steps and only re-runs the LLM/embedding + MCP config seed steps against that VM -- for fixing config drift without a full redeploy."
+        required: false
+        type: string
+        default: ""
 
 # Least-privilege: read-only repo access, plus the OIDC id-token needed for
 # Azure login. No write access to repo contents/packages is requested.
@@ -188,6 +193,7 @@ jobs:
 
       - name: Resolve latest snapshots (steady-state) or none (bootstrap)
         id: snapshots
+        if: ${{ inputs.seed_config_only_vm_name == '' }}
         run: |
           set -euo pipefail
           RG="${{ vars.DEMO_RESOURCE_GROUP }}"
@@ -229,6 +235,7 @@ jobs:
       # any job with `permissions: id-token: write` (already set above) --
       # no separate token-fetch step needed.
       - name: Terraform init
+        if: ${{ inputs.seed_config_only_vm_name == '' }}
         working-directory: infra/terraform/demo-env
         env:
           ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -248,6 +255,7 @@ jobs:
 
       - name: Terraform apply
         id: apply
+        if: ${{ inputs.seed_config_only_vm_name == '' }}
         working-directory: infra/terraform/demo-env
         env:
           ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -277,13 +285,36 @@ jobs:
           echo "public_ip=$(terraform output -raw public_ip_address)" >> "$GITHUB_OUTPUT"
           echo "vm_id=$(terraform output -raw vm_id)" >> "$GITHUB_OUTPUT"
 
+      # Resolves the VM target for every later step. Normal create: just
+      # passes through Terraform apply's own outputs. Seed-only repair mode
+      # (inputs.seed_config_only_vm_name set): looks the existing VM up
+      # directly by name instead, so the config-seed steps below can target
+      # it without provisioning/Terraform ever running.
+      - name: Resolve VM target (provisioned or existing)
+        id: target
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.seed_config_only_vm_name }}" ]; then
+            RG="${{ vars.DEMO_RESOURCE_GROUP }}"
+            VM_ID=$(az vm show -g "$RG" -n "${{ inputs.seed_config_only_vm_name }}" --query id -o tsv)
+            PUBLIC_IP=$(az vm list-ip-addresses -g "$RG" -n "${{ inputs.seed_config_only_vm_name }}" \
+              --query "[0].virtualMachine.network.publicIpAddresses[0].ipAddress" -o tsv)
+            echo "Seed-only mode: targeting existing VM '${{ inputs.seed_config_only_vm_name }}' (no provisioning)."
+          else
+            VM_ID="${{ steps.apply.outputs.vm_id }}"
+            PUBLIC_IP="${{ steps.apply.outputs.public_ip }}"
+          fi
+          echo "vm_id=${VM_ID}" >> "$GITHUB_OUTPUT"
+          echo "public_ip=${PUBLIC_IP}" >> "$GITHUB_OUTPUT"
+
       - name: Deploy application stack to VM (az vm run-command, no SSH)
         id: deploy
+        if: ${{ inputs.seed_config_only_vm_name == '' }}
         env:
           DEPLOY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          VM_ID="${{ steps.apply.outputs.vm_id }}"
+          VM_ID="${{ steps.target.outputs.vm_id }}"
 
           # No SSH key or long-lived PAT is used here -- az vm run-command
           # executes over the Azure control plane via the VM agent,
@@ -383,7 +414,7 @@ jobs:
         id: seed_llm_config
         run: |
           set -euo pipefail
-          VM_ID="${{ steps.apply.outputs.vm_id }}"
+          VM_ID="${{ steps.target.outputs.vm_id }}"
 
           # CloudMax's primary LLM and embedding model connections live in
           # the same app_config DB table as the MCP connections seeded below
@@ -493,10 +524,10 @@ jobs:
 
       - name: Deploy hotel-reservation-application (optional)
         id: deploy_hotel
-        if: ${{ inputs.deploy_hotel_reservation_app }}
+        if: ${{ inputs.deploy_hotel_reservation_app && inputs.seed_config_only_vm_name == '' }}
         run: |
           set -euo pipefail
-          VM_ID="${{ steps.apply.outputs.vm_id }}"
+          VM_ID="${{ steps.target.outputs.vm_id }}"
 
           # No git clone of the private fault-injector repo on the VM at all
           # anymore -- its 7 custom-built services are pre-built and
@@ -514,7 +545,7 @@ jobs:
           OUTPUT=$(az vm run-command invoke \
             --ids "$VM_ID" \
             --command-id RunShellScript \
-            --parameters "${{ vars.ACR_REGISTRY }}" "${{ vars.IMAGE_NAMESPACE }}" "latest" "${{ steps.apply.outputs.public_ip }}" \
+            --parameters "${{ vars.ACR_REGISTRY }}" "${{ vars.IMAGE_NAMESPACE }}" "latest" "${{ steps.target.outputs.public_ip }}" \
             --scripts '
               set -eu
               ACR_REGISTRY_ARG="$1"
@@ -591,10 +622,10 @@ jobs:
 
       - name: Deploy fault-injector platform (optional)
         id: deploy_fault_injector
-        if: ${{ inputs.deploy_hotel_reservation_app && inputs.deploy_fault_injector }}
+        if: ${{ inputs.deploy_hotel_reservation_app && inputs.deploy_fault_injector && inputs.seed_config_only_vm_name == '' }}
         run: |
           set -euo pipefail
-          VM_ID="${{ steps.apply.outputs.vm_id }}"
+          VM_ID="${{ steps.target.outputs.vm_id }}"
 
           # Same no-PAT-on-the-VM posture as the hotel app deploy step above:
           # the 4 custom-built fault-injector-* images are pre-built and
@@ -685,10 +716,10 @@ jobs:
 
       - name: Provision Grafana API key for grafana-mcp-server (optional)
         id: grafana_key
-        if: ${{ inputs.deploy_hotel_reservation_app }}
+        if: ${{ inputs.deploy_hotel_reservation_app && inputs.seed_config_only_vm_name == '' }}
         run: |
           set -euo pipefail
-          VM_ID="${{ steps.apply.outputs.vm_id }}"
+          VM_ID="${{ steps.target.outputs.vm_id }}"
 
           # grafana-mcp-server needs a real Grafana service-account token to
           # actually work (GRAFANA_API_KEY defaults to an empty string in
@@ -706,7 +737,7 @@ jobs:
           az vm run-command invoke \
             --ids "$VM_ID" \
             --command-id RunShellScript \
-            --parameters "${{ vars.ACR_REGISTRY }}" "${{ vars.IMAGE_NAMESPACE }}" "latest" "${{ steps.apply.outputs.public_ip }}" \
+            --parameters "${{ vars.ACR_REGISTRY }}" "${{ vars.IMAGE_NAMESPACE }}" "latest" "${{ steps.target.outputs.public_ip }}" \
             --scripts '
               set -eu
               ACR_REGISTRY_ARG="$1"
@@ -806,8 +837,8 @@ jobs:
         if: ${{ inputs.deploy_hotel_reservation_app }}
         run: |
           set -euo pipefail
-          VM_ID="${{ steps.apply.outputs.vm_id }}"
-          VM_PUBLIC_IP="${{ steps.apply.outputs.public_ip }}"
+          VM_ID="${{ steps.target.outputs.vm_id }}"
+          VM_PUBLIC_IP="${{ steps.target.outputs.public_ip }}"
 
           # CloudMax's backend reads its MCP/observability-system connections
           # from the app_config DB table (CONFIG_DB=true in
@@ -870,9 +901,10 @@ jobs:
 
       - name: Health check
         id: health
+        if: ${{ inputs.seed_config_only_vm_name == '' }}
         run: |
           set -euo pipefail
-          PUBLIC_IP="${{ steps.apply.outputs.public_ip }}"
+          PUBLIC_IP="${{ steps.target.outputs.public_ip }}"
           ATTEMPTS=20
           SLEEP_SECONDS=15
 
@@ -890,14 +922,14 @@ jobs:
           exit 1
 
       - name: Report demo URL
-        if: success()
+        if: ${{ success() && inputs.seed_config_only_vm_name == '' }}
         run: |
           {
             echo "## Demo environment ready"
             echo ""
             echo "- **Demo name:** ${{ inputs.demo_name }}"
             echo "- **Requested by:** ${{ github.actor }}"
-            echo "- **URL:** https://${{ steps.apply.outputs.public_ip }}"
+            echo "- **URL:** https://${{ steps.target.outputs.public_ip }}"
           } >> "$GITHUB_STEP_SUMMARY"
 
           if [ "${{ inputs.deploy_hotel_reservation_app }}" = "true" ]; then
@@ -905,9 +937,9 @@ jobs:
               echo ""
               echo "## fault-injector hotel-reservation-application"
               echo ""
-              echo "- **URL:** http://${{ steps.apply.outputs.public_ip }}:8090"
+              echo "- **URL:** http://${{ steps.target.outputs.public_ip }}:8090"
               echo "- Reachable from the CloudMax stack (and vice versa) by container name on both stacks' bridge networks, e.g. \`http://hotel-grafana-mcp:8000\`, \`http://hotel-jaeger-mcp:8000\` from CloudMax, or \`http://cloudmax-backend:8000\` from the hotel stack."
-              echo "- Internal-only (not exposed via NSG): Grafana, Jaeger UI, Prometheus, Loki, and the rest of the observability stack -- inspect via \`az vm run-command\` on \`${{ steps.apply.outputs.vm_id }}\`."
+              echo "- Internal-only (not exposed via NSG): Grafana, Jaeger UI, Prometheus, Loki, and the rest of the observability stack -- inspect via \`az vm run-command\` on \`${{ steps.target.outputs.vm_id }}\`."
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
@@ -916,11 +948,23 @@ jobs:
               echo ""
               echo "## fault-injector platform (Fault Gen UI)"
               echo ""
-              echo "- **URL:** http://${{ steps.apply.outputs.public_ip }}:4009"
+              echo "- **URL:** http://${{ steps.target.outputs.public_ip }}:4009"
               echo "- Use this to manually trigger faults against the hotel-reservation-application (Postgres write locks, Kafka schema mismatches, container restarts, memory stress, etc.). Each fault injection is reflected in Jaeger/Grafana, fires a Grafana alert into CloudMax for automated triage, and is separately ground-truth-recorded via cloudmax-backend's /v1/fault-ledger endpoint."
-              echo "- Internal-only (not exposed via NSG): Airflow webserver, airflow-postgres, redis, custom-ui-backend (3009), fault-service (8010) -- inspect via \`az vm run-command\` on \`${{ steps.apply.outputs.vm_id }}\`."
+              echo "- Internal-only (not exposed via NSG): Airflow webserver, airflow-postgres, redis, custom-ui-backend (3009), fault-service (8010) -- inspect via \`az vm run-command\` on \`${{ steps.target.outputs.vm_id }}\`."
             } >> "$GITHUB_STEP_SUMMARY"
           fi
+
+      - name: Report seed-only completion
+        if: ${{ success() && inputs.seed_config_only_vm_name != '' }}
+        run: |
+          {
+            echo "## Config re-seed complete (no redeploy)"
+            echo ""
+            echo "- **VM:** ${{ inputs.seed_config_only_vm_name }}"
+            echo "- **Public IP:** ${{ steps.target.outputs.public_ip }}"
+            echo "- Re-applied: primary LLM + embedding config. MCP connections also re-applied if deploy_hotel_reservation_app was left true."
+            echo "- No Terraform apply, no app redeploy -- verify the result in CloudMax's Settings UI."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Azure logout
         if: always()
