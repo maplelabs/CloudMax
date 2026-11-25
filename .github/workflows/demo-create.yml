@@ -585,24 +585,39 @@ jobs:
               # an external/shared network, so neither repo takes on a
               # dependency on infrastructure owned by the other. Instead, every
               # already-running container from both stacks is additionally
-              # attached to the OTHER stack network post-startup, with
-              # --alias set to its own compose service name, so DNS-based
-              # service discovery (e.g. http://hotel-grafana-mcp:8000,
-              # http://cloudmax-mcp-server:8000) works symmetrically in both
+              # attached to the OTHER stack network post-startup, relying on
+              # Docker's own automatic per-network DNS registration of each
+              # container's container_name (no explicit --alias needed) for
+              # DNS-based service discovery (e.g. http://hotel-grafana-mcp:8000,
+              # http://cloudmax-mcp-server:8000) to work symmetrically in both
               # directions.
+              #
+              # IMPORTANT: do NOT pass --alias <compose-service-name> here.
+              # Confirmed via a real failure: both compose files happen to
+              # name a service literally "postgres" (cloudmax's own Postgres
+              # vs. hotel_postgres) and another "frontend" -- aliasing by
+              # compose service name on the shared cloudmax network collided
+              # hotel_postgres's "postgres" alias with cloudmax-postgres's own
+              # "postgres" alias on that same network, making DNS lookups for
+              # "postgres" from cloudmax-backend non-deterministically resolve
+              # to either container and causing intermittent "password
+              # authentication failed for user otelu" errors (right password,
+              # wrong Postgres server). container_name values are already
+              # unique across both compose files, so plain `docker network
+              # connect` (no --alias) is both sufficient and collision-free.
               CLOUDMAX_NET="cloudmax_cloudmax-network"
               HOTEL_NET="hotel_hotel_network"
 
               for svc in $(docker compose ps --services); do
                 CID=$(docker compose ps -q "$svc")
                 if [ -n "$CID" ]; then
-                  docker network connect --alias "$svc" "$CLOUDMAX_NET" "$CID" 2>/dev/null || true
+                  docker network connect "$CLOUDMAX_NET" "$CID" 2>/dev/null || true
                 fi
               done
 
               for CNAME in cloudmax-backend cloudmax-mcp-server cloudmax-code-triage-agent cloudmax-frontend; do
                 if docker ps --format "{{.Names}}" | grep -qx "$CNAME"; then
-                  docker network connect --alias "$CNAME" "$HOTEL_NET" "$CNAME" 2>/dev/null || true
+                  docker network connect "$HOTEL_NET" "$CNAME" 2>/dev/null || true
                 fi
               done
               echo "DEPLOY_HOTEL_OK"
