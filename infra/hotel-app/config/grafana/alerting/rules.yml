@@ -154,10 +154,20 @@ groups:
               type: threshold
               expression: A
               conditions:
+                # Raised from 100 MiB (104857600) -- confirmed via live
+                # Prometheus data that search-service's normal steady-state
+                # working set sits at ~109-114 MiB post-startup (Python/
+                # FastAPI + Elasticsearch client libraries loaded), which was
+                # permanently tripping the old 100 MiB threshold even with
+                # zero actual growth (the companion deriv()-based
+                # search-service-rapid-memory-growth rule, which does detect
+                # real leaks, stayed correctly silent the whole time). 150
+                # MiB gives headroom above the observed baseline while still
+                # catching genuine excessive usage.
                 - evaluator:
                     type: gt
                     params:
-                      - 104857600
+                      - 157286400
 
       - uid: kafka-dlq-message-growth
         title: 'kafka dlq message growth'
