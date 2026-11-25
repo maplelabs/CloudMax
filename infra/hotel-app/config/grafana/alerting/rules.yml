@@ -97,7 +97,7 @@ groups:
         title: 'docker container restart'
         condition: C
         for: 1m
-        noDataState: NoData
+        noDataState: OK
         execErrState: Error
         isPaused: false
         notification_settings:
@@ -129,7 +129,7 @@ groups:
         title: search service rapid memory growth
         condition: C
         for: 1m
-        noDataState: NoData
+        noDataState: OK
         execErrState: Error
         isPaused: false
         notification_settings:
@@ -170,7 +170,7 @@ groups:
         title: search service high memory usage
         condition: C
         for: 1m
-        noDataState: NoData
+        noDataState: OK
         execErrState: Error
         isPaused: false
         notification_settings:
@@ -202,7 +202,7 @@ groups:
         title: 'kafka dlq message growth'
         condition: C
         for: 1m
-        noDataState: NoData
+        noDataState: OK
         execErrState: Error
         isPaused: false
         notification_settings:
@@ -234,7 +234,7 @@ groups:
         title: 'postgres share row exclusive lock detected'
         condition: C
         for: 1m
-        noDataState: NoData
+        noDataState: OK
         execErrState: Error
         isPaused: false
         notification_settings:
@@ -266,7 +266,7 @@ groups:
         title: 'nginx error'
         condition: C
         for: 1m
-        noDataState: NoData
+        noDataState: OK
         execErrState: Error
         isPaused: true
         notification_settings:
@@ -298,7 +298,7 @@ groups:
         title: high api failure
         condition: C
         for: 1m
-        noDataState: NoData
+        noDataState: OK
         execErrState: Error
         isPaused: true
         notification_settings:
@@ -330,7 +330,7 @@ groups:
         title: High Consumer Lag detection
         condition: C
         for: 1m
-        noDataState: NoData
+        noDataState: OK
         execErrState: Error
         isPaused: false
         notification_settings:
@@ -372,7 +372,7 @@ groups:
         title: Nginx_High_HTTP_Error_Count
         condition: C
         for: 1m
-        noDataState: NoData
+        noDataState: OK
         execErrState: Error
         isPaused: true
         notification_settings:
