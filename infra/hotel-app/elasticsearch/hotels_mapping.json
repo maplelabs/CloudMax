@@ -1,0 +1,52 @@
+{
+  "mappings": {
+    "properties": {
+      "id": { "type": "keyword" },
+      "name": { "type": "text" },
+      "city": {
+        "type": "text",
+        "fields": { "keyword": { "type": "keyword" } }
+      },
+      "description": { "type": "text" },
+      "address": { "type": "text" },
+      "image_url": { "type": "keyword" },
+      "current_rating": {
+        "properties": {
+          "avg_rating": { "type": "float" },
+          "total_reviews": { "type": "integer" }
+        }
+      },
+      "current_pricing": {
+        "properties": {
+          "min_price": { "type": "float" },
+          "max_price": { "type": "float" },
+          "currency": { "type": "keyword" }
+        }
+      },
+      "hotel_amenities": {
+        "properties": {
+          "complementary_breakfast": { "type": "boolean" },
+          "parking_available": { "type": "boolean" },
+          "wifi": { "type": "boolean" },
+          "pool": { "type": "boolean" },
+          "gym": { "type": "boolean" }
+        }
+      },
+      "hotel_policies": {
+        "properties": {
+          "pets_allowed": { "type": "boolean" },
+          "free_cancellation": { "type": "boolean" },
+          "prepayment_needed": { "type": "boolean" }
+        }
+      },
+      "room_types": {
+        "type": "nested",
+        "properties": {
+          "type": { "type": "keyword" },
+          "max_occupancy": { "type": "integer" },
+          "price_per_night": { "type": "float" }
+        }
+      }
+    }
+  }
+}
