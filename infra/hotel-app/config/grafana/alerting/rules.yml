@@ -121,6 +121,16 @@ groups:
           # is the correct PromQL function for a gauge's per-second rate of
           # change (linear regression over the range, handles decreases
           # correctly instead of misinterpreting them as counter resets).
+          #
+          # Window shrunk 5m -> 1m: confirmed live against a real
+          # fault_memory_stress_search_service injection that a genuine
+          # ~26.5 MiB jump occurring in under 15s was diluted by deriv()'s
+          # linear regression across a full 5-minute window (mostly flat
+          # baseline on both sides of the brief spike) down to only
+          # ~117,870 B/s -- far under the 700,000 B/s threshold despite the
+          # instantaneous rate during the spike itself being ~1.9M B/s. A
+          # 1-minute window keeps enough flat baseline for stability but no
+          # longer buries a burst this short.
           - refId: A
             datasourceUid: prometheus-ds
             relativeTimeRange:
@@ -128,7 +138,7 @@ groups:
               to: 0
             model:
               refId: A
-              expr: 'deriv(container_memory_usage_bytes{container_label_com_docker_compose_service="search-service"}[5m])'
+              expr: 'deriv(container_memory_usage_bytes{container_label_com_docker_compose_service="search-service"}[1m])'
               instant: true
               range: false
           - refId: C
@@ -172,20 +182,21 @@ groups:
               type: threshold
               expression: A
               conditions:
-                # Raised from 100 MiB (104857600) -- confirmed via live
-                # Prometheus data that search-service's normal steady-state
-                # working set sits at ~109-114 MiB post-startup (Python/
-                # FastAPI + Elasticsearch client libraries loaded), which was
-                # permanently tripping the old 100 MiB threshold even with
-                # zero actual growth (the companion deriv()-based
-                # search-service-rapid-memory-growth rule, which does detect
-                # real leaks, stayed correctly silent the whole time). 150
-                # MiB gives headroom above the observed baseline while still
-                # catching genuine excessive usage.
+                # History: raised 100 MiB (104857600) -> 150 MiB
+                # (157286400) to stop permanently tripping on normal
+                # steady-state usage (~109-114 MiB baseline). Then lowered
+                # back down to 125 MiB (131072000) -- confirmed live that a
+                # real fault_memory_stress_search_service injection only
+                # peaked at 135.3 MiB (container was restarted before
+                # reaching the fault's full documented ~400MB footprint),
+                # which the 150 MiB threshold missed entirely. 125 MiB
+                # splits the difference: still above the ~109-114 MiB normal
+                # baseline (no false positives), but low enough to catch
+                # this fault's actual real-world magnitude.
                 - evaluator:
                     type: gt
                     params:
-                      - 157286400
+                      - 131072000
 
       - uid: kafka-dlq-message-growth
         title: 'kafka dlq message growth'
