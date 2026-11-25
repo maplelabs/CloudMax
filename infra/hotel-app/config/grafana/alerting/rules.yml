@@ -1,3 +1,15 @@
+# Every rule below carries `labels: {severity: P1}`. CloudMax's webhook
+# ingestion (core/backend/src/server/apis_v1/webhooks.py,
+# map_severity_to_standard()) defaults ANY alert with no `severity` label
+# to P3, and AppConfig.enabled_severities defaults to {P1} only -- so
+# without this label, every alert from this file was being accepted and
+# stored (visible in the UI), but silently excluded from automatic
+# triage (no alert_groups/triages row ever created). Confirmed live: a
+# fired search-service-high-memory-usage alert sat untriaged with
+# severity=P3 until this label was added. P1 is used uniformly here so
+# this demo's automated-triage pipeline actually exercises end-to-end
+# for every fault type, matching AppConfig's default enabled_severities.
+#
 # File-provisioned Grafana alert rule(s) for the hotel reservation app.
 # Auto-created in the "Hotel Reservation Alerts" folder (Grafana creates
 # the folder itself if it doesn't already exist) on every Grafana startup
@@ -61,6 +73,8 @@ groups:
         noDataState: OK
         execErrState: Error
         isPaused: false
+        labels:
+          severity: P1
         notification_settings:
           receiver: cloudmax-webhook
         data:
@@ -93,6 +107,8 @@ groups:
         noDataState: OK
         execErrState: Error
         isPaused: false
+        labels:
+          severity: P1
         notification_settings:
           receiver: cloudmax-webhook
         data:
@@ -134,6 +150,8 @@ groups:
         noDataState: OK
         execErrState: Error
         isPaused: false
+        labels:
+          severity: P1
         notification_settings:
           receiver: cloudmax-webhook
         data:
@@ -176,6 +194,8 @@ groups:
         noDataState: OK
         execErrState: Error
         isPaused: false
+        labels:
+          severity: P1
         notification_settings:
           receiver: cloudmax-webhook
         data:
@@ -208,6 +228,8 @@ groups:
         noDataState: OK
         execErrState: Error
         isPaused: false
+        labels:
+          severity: P1
         notification_settings:
           receiver: cloudmax-webhook
         data:
@@ -240,6 +262,8 @@ groups:
         noDataState: OK
         execErrState: Error
         isPaused: true
+        labels:
+          severity: P1
         notification_settings:
           receiver: cloudmax-webhook
         data:
@@ -272,6 +296,8 @@ groups:
         noDataState: OK
         execErrState: Error
         isPaused: true
+        labels:
+          severity: P1
         notification_settings:
           receiver: cloudmax-webhook
         data:
@@ -304,6 +330,8 @@ groups:
         noDataState: OK
         execErrState: Error
         isPaused: false
+        labels:
+          severity: P1
         notification_settings:
           receiver: cloudmax-webhook
         data:
@@ -346,6 +374,8 @@ groups:
         noDataState: OK
         execErrState: Error
         isPaused: true
+        labels:
+          severity: P1
         notification_settings:
           receiver: cloudmax-webhook
         data:
