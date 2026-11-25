@@ -779,27 +779,53 @@ jobs:
         run: |
           set -euo pipefail
           VM_ID="${{ steps.apply.outputs.vm_id }}"
+          VM_PUBLIC_IP="${{ steps.apply.outputs.public_ip }}"
 
           # CloudMax's backend reads its MCP/observability-system connections
           # from the app_config DB table (CONFIG_DB=true in
           # docker-compose.prod.yml), not from env vars -- that table is
           # empty by default, so without this step CloudMax would never
-          # discover hotel-grafana-mcp/hotel-jaeger-mcp on its own, even
-          # though both are already network-reachable by container name (see
-          # the hotel-app deploy step's bridging above).
+          # discover Grafana/Jaeger on its own. Enabled by default here
+          # (enabled: true) using the demo VM's own public IP on the
+          # host-published MCP ports (grafana-mcp-server: 8012, jaeger-mcp-
+          # server: 8011 -- see infra/hotel-app/docker-compose.yml), with
+          # connection_type streamable-http (CloudMax's "HTTP streaming"
+          # option), matching what a user actually reaches testing the
+          # connection from the Settings UI.
           #
           # Runs the seed script INSIDE the cloudmax-backend container via
-          # docker exec (base64-encoded onto the VM first, docker cp'd in,
-          # then executed) so it reuses the app's own SQLAlchemy models/DB
-          # connection exactly as the running app would -- no hand-written
-          # SQL, no separate DB credentials needed on this side at all.
+          # docker exec (checked into the repo at
+          # infra/cloudmax/scripts/seed_mcp_config.py and already present on
+          # the VM from this repo's own git clone, done in the deploy step
+          # above -- no base64 re-embedding needed) so it reuses the app's
+          # own SQLAlchemy models/enum values exactly as the running app
+          # would -- no hand-written SQL, no enum-value guessing.
           az vm run-command invoke \
             --ids "$VM_ID" \
             --command-id RunShellScript \
-            --parameters "IiIiCk9uZS1vZmYgc2VlZDogZW5zdXJlIENsb3VkTWF4J3MgQXBwQ29uZmlnLm1jcF9jb25uZWN0aW9ucyBpbmNsdWRlcyBlbmFibGVkCkdyYWZhbmEgYW5kIEphZWdlciBNQ1Agc2VydmVyIGVudHJpZXMgcG9pbnRpbmcgYXQgdGhlIGhvdGVsIGFwcCdzIG93bgpNQ1Agc2VydmVycyAoaG90ZWwtZ3JhZmFuYS1tY3AgLyBob3RlbC1qYWVnZXItbWNwKSwgcmVhY2hhYmxlIGJ5IGNvbnRhaW5lcgpuYW1lIHNpbmNlIGJvdGggc3RhY2tzIGFyZSBicmlkZ2VkIG9udG8gYSBzaGFyZWQgZG9ja2VyIG5ldHdvcmsgYnkKZGVtby1jcmVhdGUueW1sLgoKUnVuIGluc2lkZSB0aGUgY2xvdWRtYXgtYmFja2VuZCBjb250YWluZXIgKGhhcyBEQVRBQkFTRV9VUkwgKyBhbGwgdGhlCmFwcCdzIG93biBtb2RlbHMgYWxyZWFkeSBhdmFpbGFibGUgb24gUFlUSE9OUEFUSD0vYXBwKSwgc28gdGhpcyByZXVzZXMgdGhlCmV4YWN0IHNhbWUgU1FMQWxjaGVteSBtb2RlbHMvdHlwZXMgdGhlIHJ1bm5pbmcgYXBwIGl0c2VsZiB1c2VzIC0tIG5vCmhhbmQtd3JpdHRlbiBTUUwsIG5vIGVudW0tdHlwZSBndWVzc2luZy4KCklkZW1wb3RlbnQ6IHJlcGxhY2VzIGFueSBleGlzdGluZyBncmFmYW5hL2phZWdlciBlbnRyaWVzIGluCm1jcF9jb25uZWN0aW9ucy5zeXN0ZW1zIChrZWVwaW5nIGFueSBvdGhlciBlbnRyaWVzLCBlLmcuIG9wZW5zZWFyY2gsCnVudG91Y2hlZCkgcmF0aGVyIHRoYW4gYXBwZW5kaW5nIGR1cGxpY2F0ZXMgb24gZXZlcnkgZGVtby1jcmVhdGUueW1sIHJ1bi4KIiIiCmltcG9ydCBhc3luY2lvCgpmcm9tIHNxbGFsY2hlbXkgaW1wb3J0IHNlbGVjdAoKZnJvbSBzcmMuc2VydmVyLmFwaXNfdjEuZGVwZW5kZW5jaWVzIGltcG9ydCBhc3luY19kYl9zZXNzaW9uCmZyb20gc3JjLnNlcnZlci5tb2RlbHMuZGIuYXBwX2NvbmZpZyBpbXBvcnQgQXBwQ29uZmlnCmZyb20gc3JjLnNlcnZlci5tb2RlbHMuYXBpLmVudW1zIGltcG9ydCBTZXZlcml0eQoKR1JBRkFOQV9VUkwgPSAiaHR0cDovL2hvdGVsLWdyYWZhbmEtbWNwOjgwMDAvbWNwIgpKQUVHRVJfVVJMID0gImh0dHA6Ly9ob3RlbC1qYWVnZXItbWNwOjgwMDAvbWNwIgoKCmRlZiBtY3Bfc3lzdGVtKG5hbWUsIHVybCk6CiAgICByZXR1cm4gewogICAgICAgICJvYnNlcnZhYmlsaXR5X3N5c3RlbSI6IG5hbWUsCiAgICAgICAgImVuYWJsZWQiOiBUcnVlLAogICAgICAgICJjb25uZWN0aW9uX2NvbmZpZyI6IHsKICAgICAgICAgICAgImNvbm5lY3Rpb25fdHlwZSI6ICJzdHJlYW1hYmxlX2h0dHAiLAogICAgICAgICAgICAiZW5kcG9pbnRfdXJsIjogdXJsLAogICAgICAgICAgICAiaHR0cF9oZWFkZXJzIjogW10sCiAgICAgICAgICAgICJtdGxzX2VuYWJsZWQiOiBGYWxzZSwKICAgICAgICB9LAogICAgfQoKCmFzeW5jIGRlZiBtYWluKCk6CiAgICBhc3luYyB3aXRoIGFzeW5jX2RiX3Nlc3Npb24oKSBhcyBzZXNzaW9uOgogICAgICAgIHJlc3VsdCA9IGF3YWl0IHNlc3Npb24uZXhlY3V0ZSgKICAgICAgICAgICAgc2VsZWN0KEFwcENvbmZpZykub3JkZXJfYnkoQXBwQ29uZmlnLmlkLmRlc2MoKSkubGltaXQoMSkKICAgICAgICApCiAgICAgICAgY29uZmlnID0gcmVzdWx0LnNjYWxhcl9vbmVfb3Jfbm9uZSgpCgogICAgICAgIG5ld19zeXN0ZW1zID0gW21jcF9zeXN0ZW0oImdyYWZhbmEiLCBHUkFGQU5BX1VSTCksIG1jcF9zeXN0ZW0oImphZWdlciIsIEpBRUdFUl9VUkwpXQoKICAgICAgICBpZiBjb25maWc6CiAgICAgICAgICAgIGV4aXN0aW5nID0gKGNvbmZpZy5tY3BfY29ubmVjdGlvbnMgb3Ige30pLmdldCgic3lzdGVtcyIsIFtdKQogICAgICAgICAgICBrZXB0ID0gW3MgZm9yIHMgaW4gZXhpc3RpbmcgaWYgcy5nZXQoIm9ic2VydmFiaWxpdHlfc3lzdGVtIikgbm90IGluICgiZ3JhZmFuYSIsICJqYWVnZXIiKV0KICAgICAgICAgICAgY29uZmlnLm1jcF9jb25uZWN0aW9ucyA9IHsic3lzdGVtcyI6IGtlcHQgKyBuZXdfc3lzdGVtc30KICAgICAgICAgICAgcHJpbnQoZiJVcGRhdGVkIGV4aXN0aW5nIEFwcENvbmZpZyAoaWQ9e2NvbmZpZy5pZH0pIHdpdGggZ3JhZmFuYS9qYWVnZXIgTUNQIGNvbm5lY3Rpb25zLiIpCiAgICAgICAgZWxzZToKICAgICAgICAgICAgY29uZmlnID0gQXBwQ29uZmlnKAogICAgICAgICAgICAgICAgZW5hYmxlZF9zZXZlcml0aWVzPVtTZXZlcml0eS5QMV0sCiAgICAgICAgICAgICAgICBtY3BfY29ubmVjdGlvbnM9eyJzeXN0ZW1zIjogbmV3X3N5c3RlbXN9LAogICAgICAgICAgICAgICAgY29kZV90cmlhZ2luZ19hZ2VudF9lbmFibGVkPUZhbHNlLAogICAgICAgICAgICAgICAgb3JjaGVzdHJhdG9yX2FnZW50cz0xLAogICAgICAgICAgICAgICAgY2hhb3Nfc3lzdGVtX2VuYWJsZWQ9RmFsc2UsCiAgICAgICAgICAgICAgICBhdXRvbWF0aWNfdHJpYWdlPVRydWUsCiAgICAgICAgICAgICAgICBhbGVydF9ncm91cGluZ19lbmFibGVkPVRydWUsCiAgICAgICAgICAgICkKICAgICAgICAgICAgc2Vzc2lvbi5hZGQoY29uZmlnKQogICAgICAgICAgICBwcmludCgiTm8gZXhpc3RpbmcgQXBwQ29uZmlnIGZvdW5kIC0tIGNyZWF0ZWQgYSBuZXcgb25lIHdpdGggZ3JhZmFuYS9qYWVnZXIgTUNQIGNvbm5lY3Rpb25zLiIpCgogICAgICAgIGF3YWl0IHNlc3Npb24uY29tbWl0KCkKCgphc3luY2lvLnJ1bihtYWluKCkpCnByaW50KCJEb25lLiIpCg==" \
+            --parameters "${VM_PUBLIC_IP}" \
             --scripts '
               set -eu
-              PAYLOAD_B64="$1"
+              VM_PUBLIC_IP_ARG="$1"
+
+              if ! docker ps --format "{{.Names}}" | grep -qx "cloudmax-backend"; then
+                echo "::warning::cloudmax-backend container not found -- skipping MCP connection seeding."
+                exit 0
+              fi
+
+              if [ ! -f /opt/cloudmax/infra/cloudmax/scripts/seed_mcp_config.py ]; then
+                echo "::warning::seed_mcp_config.py not found on VM -- skipping MCP connection seeding."
+                exit 0
+              fi
+
+              export VM_PUBLIC_IP="${VM_PUBLIC_IP_ARG}"
+              docker cp /opt/cloudmax/infra/cloudmax/scripts/seed_mcp_config.py cloudmax-backend:/tmp/seed_mcp_config.py
+              docker exec -e VM_PUBLIC_IP cloudmax-backend python3 /tmp/seed_mcp_config.py \
+                && echo "CloudMax MCP connections seeded (grafana/jaeger)." \
+                || echo "::warning::Failed to seed CloudMax MCP connections -- configure Grafana/Jaeger manually via CloudMax'\''s Settings UI."
+              docker exec cloudmax-backend rm -f /tmp/seed_mcp_config.py
+            '
+
 
               if ! docker ps --format "{{.Names}}" | grep -qx "cloudmax-backend"; then
                 echo "::warning::cloudmax-backend container not found -- skipping MCP connection seeding."
