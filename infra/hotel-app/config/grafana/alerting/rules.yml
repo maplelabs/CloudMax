@@ -8,19 +8,6 @@
 # ./contactpoints.yml / ./policies.yml) for where alerts get routed.
 apiVersion: 1
 
-# disableProvenance: once Grafana applies this file, it stops marking these
-# rules as provenance=file (which otherwise locks them read-only in the UI
-# -- no edit, no pause-evaluation toggle, regardless of the user's role).
-# With this set, the file still seeds/updates rules as before, but afterward
-# they behave like normal UI-managed rules: editable, pausable, deletable.
-# Trade-off (accepted): once a rule has been edited in the UI on a given
-# Grafana instance, future changes to this file will NOT be reapplied to
-# that already-provisioned rule on that instance (only to instances where
-# the rule doesn't exist yet, e.g. a fresh VM) -- so UI edits and this file
-# can drift apart on long-lived demo VMs. Re-running demo-create.yml against
-# a FRESH VM is unaffected and always gets the file's current version.
-disableProvenance: true
-
 groups:
   - orgId: 1
     name: hotel-app-alerts
