@@ -8,6 +8,21 @@
 # ./contactpoints.yml / ./policies.yml) for where alerts get routed.
 apiVersion: 1
 
+# NOTE on editing/pausing these rules via the Grafana UI: Grafana locks ANY
+# rule loaded from this file as provenance=file, and (confirmed live + see
+# https://github.com/grafana/grafana/issues/103597) there is currently NO
+# supported way to unlock a file-provisioned rule for UI edits -- not via
+# the UI, not via the provisioning API's X-Disable-Provenance header (that
+# only applies when CREATING a brand-new API-provisioned rule; attempting
+# it on an existing file-provisioned rule fails with HTTP 409
+# provenanceMismatch, confirmed live against this exact file's rules). A
+# top-level `disableProvenance: true` key here was tried and does nothing
+# (also confirmed live -- provenance stayed 'file' after a redeploy).
+# The ONLY supported way to change isPaused (or anything else) on these
+# rules is to edit this file and redeploy Grafana -- see each rule's
+# isPaused field below (nginx-error, high-api-failure, and
+# nginx-high-http-error-count are currently paused this way).
+
 groups:
   - orgId: 1
     name: hotel-app-alerts
