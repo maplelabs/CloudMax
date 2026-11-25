@@ -68,6 +68,7 @@ services:
       options:
         max-size: "10m"
         max-file: "1"
+    restart: unless-stopped
 
   search-service:
     image: ${ACR_REGISTRY}/${IMAGE_NAMESPACE}/hotel-search-service:${HOTEL_IMAGE_TAG}
@@ -118,8 +119,11 @@ services:
       - OTEL_METRICS_EXPORTER=none
       - OTEL_LOGS_EXPORTER=none
     depends_on:
-      - postgres
-      - otel-collector
+      postgres:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    restart: unless-stopped
     networks:
       - hotel_network
     logging:
@@ -152,9 +156,13 @@ services:
       - OTEL_SERVICE_NAME=booking-service
       - OTEL_RESOURCE_ATTRIBUTES=service.namespace=hotel-reservation,service.version=1.0.0
     depends_on:
-      - postgres
-      - search-service
-      - otel-collector
+      postgres:
+        condition: service_healthy
+      search-service:
+        condition: service_started
+      otel-collector:
+        condition: service_started
+    restart: unless-stopped
     networks:
       - hotel_network
     logging:
@@ -166,6 +174,7 @@ services:
   postgres:
     image: postgres:16
     container_name: hotel_postgres
+    restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: password
@@ -174,6 +183,22 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./database/init:/docker-entrypoint-initdb.d
+    # Without this, any service with `depends_on: [postgres]` only waits
+    # for the CONTAINER to start, not for Postgres to actually be ready to
+    # accept connections -- on a cold VM boot this routinely loses the race
+    # (confirmed via a real failure: hotel-authentication-service connected
+    # before Postgres had finished first-time initialization, got
+    # "password authentication failed" -- a transient Postgres-not-ready
+    # state, not an actual credential mismatch -- crashed once, and (having
+    # no restart policy) stayed dead for the rest of the demo). The
+    # `condition: service_healthy` gates on dependent services now make
+    # them actually wait for this healthcheck to pass first.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
     networks:
       - hotel_network
 
@@ -189,6 +214,7 @@ services:
       - es_data:/usr/share/elasticsearch/data
     networks:
       - hotel_network
+    restart: unless-stopped
 
   frontend:
     image: ${ACR_REGISTRY}/${IMAGE_NAMESPACE}/hotel-frontend:${HOTEL_IMAGE_TAG}
@@ -216,6 +242,7 @@ services:
       options:
         max-size: "10m"
         max-file: "1"
+    restart: unless-stopped
 
   invoice-service:
     image: ${ACR_REGISTRY}/${IMAGE_NAMESPACE}/hotel-invoice-service:${HOTEL_IMAGE_TAG}
@@ -239,6 +266,7 @@ services:
       options:
         max-size: "10m"
         max-file: "1"
+    restart: unless-stopped
 
   booking-post-processing-service:
     image: ${ACR_REGISTRY}/${IMAGE_NAMESPACE}/hotel-booking-post-processing-service:${HOTEL_IMAGE_TAG}
@@ -258,10 +286,15 @@ services:
       - OTEL_SERVICE_NAME=booking-post-processing-service
       - OTEL_RESOURCE_ATTRIBUTES=service.namespace=hotel-reservation,service.version=1.0.0
     depends_on:
-      - kafka
-      - postgres
-      - invoice-service
-      - otel-collector
+      kafka:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      invoice-service:
+        condition: service_started
+      otel-collector:
+        condition: service_started
+    restart: unless-stopped
     networks:
       - hotel_network
     logging:
@@ -279,6 +312,7 @@ services:
       - "2181:2181"
     networks:
       - hotel_network
+    restart: unless-stopped
 
   kafka:
     image: confluentinc/cp-kafka:7.4.0
@@ -296,6 +330,7 @@ services:
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: true
     networks:
       - hotel_network
+    restart: unless-stopped
 
   # Kafka Exporter - Exports Kafka metrics to Prometheus
   kafka-exporter:
