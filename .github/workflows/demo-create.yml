@@ -385,19 +385,20 @@ jobs:
           set -euo pipefail
           VM_ID="${{ steps.apply.outputs.vm_id }}"
 
-          # CloudMax's primary LLM (Azure Anthropic) and embedding model
-          # (Azure OpenAI) connections live in the same app_config DB table
-          # as the MCP connections seeded below -- empty by default, which
-          # otherwise means configuring both by hand through the Settings UI
-          # after every single demo deploy.
+          # CloudMax's primary LLM and embedding model connections live in
+          # the same app_config DB table as the MCP connections seeded below
+          # -- empty by default, which otherwise means configuring both by
+          # hand through the Settings UI after every single demo deploy.
           #
-          # Non-secret fields (endpoint URLs, model/deployment IDs, API
-          # version, price per 1k tokens) come from repo Variables. Both API
-          # keys come from the cloudmax-kv Key Vault, fetched here using the
-          # VM's own system-assigned managed identity -- same pattern as
-          # POSTGRES_PASSWORD/REDIS_QUEUE_AUTH in the deploy step above, so
-          # neither key is ever passed through GitHub Actions (not even as a
-          # masked secret) or printed/logged anywhere in this step.
+          # Non-secret fields (provider, endpoint URLs, model/deployment IDs,
+          # API version, price per 1k tokens) come from repo Variables. Both
+          # API keys come from repo Secrets (LLM_API_KEY, EMBEDDING_API_KEY)
+          # -- GitHub automatically masks these in all logs/output. Passed to
+          # the VM as az vm run-command *parameters* (same mechanism already
+          # used for GITHUB_TOKEN in the hotel-app deploy step below) --
+          # never interpolated into the script text itself, so they never
+          # appear in command history or Azure Activity Log entries for this
+          # operation.
           #
           # The seed script itself (infra/cloudmax/scripts/seed_llm_config.py)
           # is already present on the VM from this repo's own git clone
@@ -405,17 +406,20 @@ jobs:
           az vm run-command invoke \
             --ids "$VM_ID" \
             --command-id RunShellScript \
-            --parameters "${{ vars.DEMO_KEY_VAULT_ID }}" "${{ vars.LLM_ENDPOINT_URL }}" "${{ vars.LLM_MODEL_ID }}" "${{ vars.LLM_PRICE_PER_1K_INPUT_TOKENS }}" "${{ vars.LLM_PRICE_PER_1K_OUTPUT_TOKENS }}" "${{ vars.EMBEDDING_ENDPOINT_URL }}" "${{ vars.EMBEDDING_DEPLOYMENT_NAME }}" "${{ vars.EMBEDDING_API_VERSION }}" \
+            --parameters "${{ vars.LLM_PROVIDER }}" "${{ vars.LLM_ENDPOINT_URL }}" "${{ vars.LLM_MODEL_ID }}" "${{ vars.LLM_PRICE_PER_1K_INPUT_TOKENS }}" "${{ vars.LLM_PRICE_PER_1K_OUTPUT_TOKENS }}" "${{ vars.EMBEDDING_LLM_PROVIDER }}" "${{ vars.EMBEDDING_ENDPOINT_URL }}" "${{ vars.EMBEDDING_DEPLOYMENT_NAME }}" "${{ vars.EMBEDDING_API_VERSION }}" "${{ secrets.LLM_API_KEY }}" "${{ secrets.EMBEDDING_API_KEY }}" \
             --scripts '
               set -eu
-              KEY_VAULT_ID_ARG="$1"
+              LLM_PROVIDER_ARG="$1"
               LLM_ENDPOINT_URL_ARG="$2"
               LLM_MODEL_ID_ARG="$3"
               LLM_PRICE_IN_ARG="$4"
               LLM_PRICE_OUT_ARG="$5"
-              EMBEDDING_ENDPOINT_URL_ARG="$6"
-              EMBEDDING_DEPLOYMENT_NAME_ARG="$7"
-              EMBEDDING_API_VERSION_ARG="$8"
+              EMBEDDING_LLM_PROVIDER_ARG="$6"
+              EMBEDDING_ENDPOINT_URL_ARG="$7"
+              EMBEDDING_DEPLOYMENT_NAME_ARG="$8"
+              EMBEDDING_API_VERSION_ARG="$9"
+              LLM_API_KEY_ARG="${10}"
+              EMBEDDING_API_KEY_ARG="${11}"
 
               if ! docker ps --format "{{.Names}}" | grep -qx "cloudmax-backend"; then
                 echo "::warning::cloudmax-backend container not found -- skipping LLM/embedding config seeding."
@@ -427,26 +431,28 @@ jobs:
                 exit 0
               fi
 
-              az login --identity
-              KV_NAME=$(basename "${KEY_VAULT_ID_ARG}")
-              export LLM_API_KEY=[redacted]] keyvault secret show --vault-name "$KV_NAME" --name cloudmax-llm-api-key --query value -o tsv)
-              export EMBEDDING_API_KEY=$(az keyvault secret show --vault-name "$KV_NAME" --name cloudmax-embedding-api-key --query value -o tsv)
+              export LLM_PROVIDER="${LLM_PROVIDER_ARG}"
               export LLM_ENDPOINT_URL="${LLM_ENDPOINT_URL_ARG}"
               export LLM_MODEL_ID="${LLM_MODEL_ID_ARG}"
               export LLM_PRICE_PER_1K_INPUT_TOKENS="${LLM_PRICE_IN_ARG}"
               export LLM_PRICE_PER_1K_OUTPUT_TOKENS="${LLM_PRICE_OUT_ARG}"
+              export EMBEDDING_LLM_PROVIDER="${EMBEDDING_LLM_PROVIDER_ARG}"
               export EMBEDDING_ENDPOINT_URL="${EMBEDDING_ENDPOINT_URL_ARG}"
               export EMBEDDING_DEPLOYMENT_NAME="${EMBEDDING_DEPLOYMENT_NAME_ARG}"
               export EMBEDDING_API_VERSION="${EMBEDDING_API_VERSION_ARG}"
+              export LLM_API_KEY="${LLM_API_KEY_ARG}"
+              export EMBEDDING_API_KEY="${EMBEDDING_API_KEY_ARG}"
 
               docker cp /opt/cloudmax/infra/cloudmax/scripts/seed_llm_config.py cloudmax-backend:/tmp/seed_llm_config.py
               docker exec \
+                -e LLM_PROVIDER \
                 -e LLM_API_KEY \
                 -e EMBEDDING_API_KEY \
                 -e LLM_ENDPOINT_URL \
                 -e LLM_MODEL_ID \
                 -e LLM_PRICE_PER_1K_INPUT_TOKENS \
                 -e LLM_PRICE_PER_1K_OUTPUT_TOKENS \
+                -e EMBEDDING_LLM_PROVIDER \
                 -e EMBEDDING_ENDPOINT_URL \
                 -e EMBEDDING_DEPLOYMENT_NAME \
                 -e EMBEDDING_API_VERSION \
@@ -455,6 +461,7 @@ jobs:
                 || echo "::warning::Failed to seed CloudMax LLM/embedding config -- configure manually via CloudMax'\''s Settings UI."
               docker exec cloudmax-backend rm -f /tmp/seed_llm_config.py
             '
+
 
       - name: Deploy hotel-reservation-application (optional)
         id: deploy_hotel
