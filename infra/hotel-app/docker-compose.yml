@@ -544,7 +544,19 @@ services:
 
   # Promtail - Log shipper for Loki
   promtail:
-    image: grafana/promtail:2.9.0
+    # Bumped from 2.9.0 -- that version's bundled Docker SDK client only
+    # speaks API 1.42, while this VM's Docker Engine enforces a minimum of
+    # 1.44 (same incompatibility class as cadvisor's, see git history on
+    # this file). Confirmed live: promtail 2.9.0's docker_sd_configs
+    # discovery failed every 5s with "client version 1.42 is too old",
+    # meaning it never discovered a single container to tail -- zero log
+    # lines ever reached Loki, which is why every Loki-backed Grafana panel
+    # (and the Nginx 5xx alert rule, which queries Loki) showed no data.
+    # Verified 3.0.0 resolves this: discovery succeeded immediately with no
+    # client-version errors, and logs started flowing into Loki (confirmed
+    # via Loki's /loki/api/v1/labels gaining a "service" label where it
+    # previously had none at all).
+    image: grafana/promtail:3.0.0
     container_name: hotel-promtail
     volumes:
       - /var/log:/var/log
