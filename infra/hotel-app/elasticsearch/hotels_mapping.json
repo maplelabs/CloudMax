@@ -43,8 +43,10 @@
         "type": "nested",
         "properties": {
           "type": { "type": "keyword" },
+          "name": { "type": "text" },
           "max_occupancy": { "type": "integer" },
-          "price_per_night": { "type": "float" }
+          "total_rooms": { "type": "integer" },
+          "price_per_night_per_room": { "type": "float" }
         }
       }
     }
