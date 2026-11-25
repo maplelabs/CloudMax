@@ -497,7 +497,22 @@ services:
 
   # cAdvisor - Container metrics collection
   cadvisor:
-    image: gcr.io/cadvisor/cadvisor:v0.47.0
+    # Bumped from 0.47.0 -- that version's bundled Docker SDK client only
+    # speaks API 1.41, while this VM's Docker Engine enforces a minimum of
+    # 1.44 (same incompatibility class fixed for promtail above). Confirmed
+    # live: 0.47.0's Docker container factory failed registration entirely
+    # ("client version 1.41 is too old"), so cAdvisor fell back to raw,
+    # unlabeled cgroup metrics only -- every container_memory_usage_bytes /
+    # container_cpu_usage_seconds_total / etc. series had numeric values but
+    # NO name=, image=, or container_label_* labels at all, which is why
+    # every panel in dashboard.json (all of which filter/group by
+    # container_label_com_docker_compose_service) showed no data.
+    # Verified 0.52.1 resolves this (combined with the containerd-snapshotter
+    # fix in infra/terraform/demo-env/main.tf -- 0.52.1 alone is not enough,
+    # see that commit): ran it live alongside the broken container and
+    # confirmed container_label_com_docker_compose_service="search-service"
+    # now appears on real container_memory_usage_bytes series.
+    image: gcr.io/cadvisor/cadvisor:v0.52.1
     container_name: hotel-cadvisor
     ports:
       - "8082:8080"
