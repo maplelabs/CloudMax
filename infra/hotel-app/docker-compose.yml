@@ -149,7 +149,7 @@ services:
       - JWT_SECRET=MyApp-Super-Secret-Key-2024-Extended-For-HMAC-SHA256-Security-Docker
       - SEARCH_SERVICE_URL=http://search-service:8000
       - FAULT_SERVICE_URL=http://host.docker.internal:8010
-      - INJECT_SCHEMA_FAULT=true  # Uncomment to enable schema fault injection
+      # - INJECT_SCHEMA_FAULT=true  # Uncomment to manually enable schema fault injection (normally triggered on-demand via the fault-injector Fault Gen UI instead)
       # OpenTelemetry Tracing Configuration
       - TRACING_ENABLED=${TRACING_ENABLED}
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
