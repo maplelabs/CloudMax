@@ -224,7 +224,14 @@ services:
       - "3001:3001"
     environment:
       - PORT=3001
-      - REACT_APP_API_URL=http://${PUBLIC_IP}:80
+      # Must point at hotel-nginx's own public port (8090), not CloudMax's
+      # (80/443) -- most frontend API calls use relative paths that resolve
+      # correctly regardless, but bookingService.js's getMyBookings/
+      # getBookingDetails prepend this absolute URL explicitly, so pointing
+      # it at :80 silently sent those requests to the wrong stack entirely
+      # (confirmed via a real failure: My Bookings never reached hotel-nginx
+      # at all, it has no /api/booking route on :80).
+      - REACT_APP_API_URL=http://${PUBLIC_IP}:8090
       # OpenTelemetry Tracing Configuration
       - REACT_APP_TRACING_ENABLED=${TRACING_ENABLED}
       - REACT_APP_OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318/v1/traces
