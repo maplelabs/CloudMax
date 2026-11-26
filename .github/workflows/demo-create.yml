@@ -357,10 +357,36 @@ jobs:
               # Fetch the exact commit that triggered this run -- not just
               # whatever is on main at deploy time -- using the short-lived
               # token above, then discard the clone directory credential.
-              rm -rf /opt/cloudmax
-              git clone --quiet "https://x-access-token:${GITHUB_TOKEN_ARG}@github.com/maplelabs/CloudMax.git" /opt/cloudmax
-              cd /opt/cloudmax
-              git checkout --quiet "${COMMIT_SHA_ARG}"
+              #
+              # Updates /opt/cloudmax IN PLACE on a re-run against an
+              # already-deployed VM, instead of rm -rf plus a fresh re-clone.
+              # The hotel-app and fault-injector compose stacks bind-mount
+              # subdirectories of this checkout (nginx/grafana config,
+              # Airflow dags/faults/fault-engine, etc.) into already-running
+              # containers that later steps do not force-recreate on every
+              # run (docker compose up -d is a no-op when the compose file
+              # itself is unchanged). rm -rf deletes and recreates the
+              # directory (new inode), orphaning those containers bind
+              # mounts -- confirmed via a real failure: re-running Create
+              # against an existing demo VM silently emptied the Airflow
+              # dags/faults bind mounts inside the already-running
+              # airflow-scheduler/webserver/worker/triggerer containers
+              # (zero DAGs loaded, empty Fault Gen UI), even though the
+              # files were correctly present on the VM filesystem
+              # afterward. An in-place fetch plus reset updates file
+              # contents within the SAME directory inode, which existing
+              # bind mounts keep working against.
+              if [ -d /opt/cloudmax/.git ]; then
+                cd /opt/cloudmax
+                git remote set-url origin "https://x-access-token:${GITHUB_TOKEN_ARG}@github.com/maplelabs/CloudMax.git"
+                git fetch --quiet origin
+                git reset --quiet --hard "${COMMIT_SHA_ARG}"
+                git clean --quiet -fdx
+              else
+                git clone --quiet "https://x-access-token:${GITHUB_TOKEN_ARG}@github.com/maplelabs/CloudMax.git" /opt/cloudmax
+                cd /opt/cloudmax
+                git checkout --quiet "${COMMIT_SHA_ARG}"
+              fi
 
               ACR_NAME=$(echo "${{ vars.ACR_REGISTRY }}" | cut -d"." -f1)
               az acr login --name "$ACR_NAME"
