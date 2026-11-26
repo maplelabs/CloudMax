@@ -74,6 +74,71 @@ services:
       start_period: 40s
     restart: unless-stopped
 
+  # Background RQ worker that actually processes alert grouping AND triage
+  # jobs (group_triage queue) -- see core/backend/src/server/async_workers/
+  # grouper.py's own header: this is the SINGLE worker for both, by design
+  # (sequential processing to avoid LangGraph/async-checkpointer conflicts).
+  # MISSING from this file previously: without it, alerts/alert groups are
+  # created and enqueued by job-scheduler below but never dequeued, so they
+  # stay in triage_status='pending' forever -- confirmed via a real failure
+  # (3 alerts stuck pending on a fresh demo deploy, zero triage containers
+  # running at all). Note: core/backend's standalone MODE=triager worker
+  # (async_workers/triager.py) is NOT part of this flow -- its queues are
+  # unused by schedule_jobs.py/grouper.py -- so it is intentionally not
+  # added here either.
+  grouper:
+    image: ${ACR_REGISTRY}/${IMAGE_NAMESPACE:-cloudmax}/backend:${IMAGE_TAG:-verified}
+    container_name: cloudmax-grouper
+    environment:
+      MODE: grouper
+      CONFIG_DB: "true"
+      DATABASE_URL: postgresql+asyncpg://otelu:${POSTGRES_PASSWORD}@postgres:5432/sreops
+      POSTGRES_CHECKPOINTER_CONN_STRING: postgresql://otelu:${POSTGRES_PASSWORD}@postgres:5432/checkpoint?sslmode=disable
+      REDIS_QUEUE_HOST: redis
+      REDIS_QUEUE_PORT: "6379"
+      REDIS_QUEUE_AUTH: ${REDIS_QUEUE_AUTH}
+      REDIS_QUEUE_DB: "1"
+      LANGFUSE_TRACING: "false"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - cloudmax-network
+    restart: unless-stopped
+
+  # One-time startup cleanup + periodic job registration (batch grouping,
+  # ungrouped retry, group-triage scheduling), then the RQ scheduler process
+  # that actually fires those jobs on their configured interval -- see
+  # core/backend/entrypoint.sh's job-scheduler case. Without this, grouper
+  # above has workers ready but nothing ever enqueues a job for them to run.
+  job-scheduler:
+    image: ${ACR_REGISTRY}/${IMAGE_NAMESPACE:-cloudmax}/backend:${IMAGE_TAG:-verified}
+    container_name: cloudmax-job-scheduler
+    environment:
+      MODE: job-scheduler
+      CONFIG_DB: "true"
+      DATABASE_URL: postgresql+asyncpg://otelu:${POSTGRES_PASSWORD}@postgres:5432/sreops
+      POSTGRES_CHECKPOINTER_CONN_STRING: postgresql://otelu:${POSTGRES_PASSWORD}@postgres:5432/checkpoint?sslmode=disable
+      REDIS_QUEUE_HOST: redis
+      REDIS_QUEUE_PORT: "6379"
+      REDIS_QUEUE_AUTH: ${REDIS_QUEUE_AUTH}
+      REDIS_QUEUE_DB: "1"
+      LANGFUSE_TRACING: "false"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - cloudmax-network
+    restart: unless-stopped
+
   frontend:
     image: ${ACR_REGISTRY}/${IMAGE_NAMESPACE:-cloudmax}/frontend:${IMAGE_TAG:-verified}
     container_name: cloudmax-frontend
