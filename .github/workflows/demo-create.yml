@@ -595,15 +595,15 @@ jobs:
               # Both stacks are independent docker-compose projects, each with
               # its own private bridge network (cloudmax_cloudmax-network /
               # hotel_hotel_network). Only ONE direction is actually needed:
-              # hotel-grafana's alert contact point
+              # hotel-grafana alert contact point
               # (config/grafana/alerting/contactpoints.yml) posts webhooks to
               # http://cloudmax-backend:8000/v1/webhooks/alerts/grafana, so
               # cloudmax-backend (and friends) must be reachable BY NAME from
-              # hotel_hotel_network. fault-notification's reverse POST to
+              # hotel_hotel_network. fault-notification reverse POST to
               # cloudmax-backend:8000/v1/fault-ledger is handled separately
               # below. Nothing requires the OTHER direction (hotel services
-              # reachable from cloudmax's network) -- Grafana/Jaeger MCP
-              # connections use the VM's public IP, not internal DNS (see
+              # reachable from the cloudmax network) -- Grafana/Jaeger MCP
+              # connections use the VM public IP, not internal DNS (see
               # seed_mcp_config.py), so that direction was pure liability.
               #
               # REMOVED (previously bridged ALL hotel-app services onto
@@ -615,15 +615,15 @@ jobs:
               # "postgres" on cloudmax_cloudmax-network, since "postgres" is
               # its compose service name. The instant ANY hotel-app container
               # (e.g. hotel-authentication-service-1) also joins
-              # cloudmax_cloudmax-network, it becomes dual-homed, and Docker's
+              # cloudmax_cloudmax-network, it becomes dual-homed, and the Docker
               # embedded DNS resolver non-deterministically answers its own
               # "postgres" lookups (meant for hotel_postgres, on its own
-              # hotel_hotel_network) with cloudmax-postgres's IP instead --
+              # hotel_hotel_network) with the cloudmax-postgres IP instead --
               # same ambiguity for "frontend". This broke real end-user
               # signup/signin (password authentication failed for user
               # "postgres" -- right password, wrong Postgres server) with no
               # workaround possible via --alias, since the collision came from
-              # Compose's own built-in per-network service-name aliasing, not
+              # Compose own built-in per-network service-name aliasing, not
               # from this script. The only fix is to not join that network at
               # all when nothing actually needs it.
               HOTEL_NET="hotel_hotel_network"
