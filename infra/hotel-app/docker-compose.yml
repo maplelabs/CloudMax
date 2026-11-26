@@ -484,7 +484,14 @@ services:
     ports:
       - "3002:3000"
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      # Fixed demo login (admin@email.com / admin@123) instead of the
+      # Grafana default admin/admin, so the demo is usable immediately
+      # without a manual credential-reset step. Grafana accepts any string
+      # as the admin login, including an email. NOTE: Grafana only applies
+      # these on a BRAND NEW grafana_data volume (first boot) -- has no
+      # effect against an existing volume that already has an admin user.
+      - GF_SECURITY_ADMIN_USER=admin@email.com
+      - GF_SECURITY_ADMIN_PASSWORD=admin@123
       - GF_USERS_ALLOW_SIGN_UP=false
     volumes:
       - grafana_data:/var/lib/grafana

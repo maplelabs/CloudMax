@@ -527,6 +527,39 @@ jobs:
               docker exec cloudmax-backend rm -f /tmp/seed_llm_config.py
             '
 
+      - name: Seed CloudMax admin user
+        id: seed_admin_user
+        run: |
+          set -euo pipefail
+          VM_ID="${{ steps.target.outputs.vm_id }}"
+
+          # Fixed demo login (admin@email.com / admin@123) so CloudMax is
+          # usable immediately without a manual sign-up step. Hits
+          # register() directly (POST /v1/auth/users/register) -- the FIRST
+          # registered user is auto-promoted to admin with no auth required
+          # (see apis_v1/auth.py); any user created after that requires an
+          # existing admin's token, so this is a no-op (soft warning, not a
+          # pipeline failure) on a VM that already has a user -- e.g. a
+          # repeat deploy against an already-provisioned VM.
+          az vm run-command invoke \
+            --ids "$VM_ID" \
+            --command-id RunShellScript \
+            --scripts '
+              if ! docker ps --format "{{.Names}}" | grep -qx "cloudmax-backend"; then
+                echo "::warning::cloudmax-backend container not found -- skipping admin user seeding."
+                exit 0
+              fi
+              HTTP_CODE=$(docker exec cloudmax-backend curl -s -o /tmp/seed_admin_resp.json -w "%{http_code}" \
+                -X POST http://localhost:8000/v1/auth/users/register \
+                -H "Content-Type: application/json" \
+                -d "{\"username\":\"admin\",\"email\":\"admin@email.com\",\"password\":\"admin@123\"}")
+              if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
+                echo "CloudMax admin user seeded (admin@email.com)."
+              else
+                echo "::warning::CloudMax admin user seed returned HTTP $HTTP_CODE -- likely already exists from a prior deploy, skipping (configure manually via CloudMax'\''s Settings UI if needed)."
+              fi
+              docker exec cloudmax-backend rm -f /tmp/seed_admin_resp.json
+            '
 
       - name: Deploy hotel-reservation-application (optional)
         id: deploy_hotel
@@ -673,6 +706,44 @@ jobs:
           echo "DEPLOY_HOTEL_OK sentinel not found (attempt ${attempt}/${MAX_ATTEMPTS}) -- retrying in 30s..."
           sleep 30
           done
+
+      - name: Seed hotel-reservation-application admin user
+        id: seed_hotel_admin_user
+        if: ${{ inputs.deploy_hotel_reservation_app }}
+        run: |
+          set -euo pipefail
+          VM_ID="${{ steps.target.outputs.vm_id }}"
+
+          # Fixed demo login (admin@email.com / admin@123), matching
+          # CloudMax/Grafana, so the hotel app is usable immediately without
+          # a manual sign-up step. Hits the authentication-service's real
+          # contract directly -- confirmed from the frontend's own source
+          # (components/auth/SignUpPage.js): POST /auth/signup with
+          # username/email/password/firstName/lastName/dateOfBirth, proxied
+          # by hotel-nginx on port 8090. firstName/lastName/dateOfBirth are
+          # required by the schema but otherwise unused by this seed's
+          # purpose, so fixed placeholder values are fine. Soft-fails (warns,
+          # does not fail the pipeline) if the email is already registered --
+          # e.g. a repeat deploy against an already-provisioned VM.
+          az vm run-command invoke \
+            --ids "$VM_ID" \
+            --command-id RunShellScript \
+            --scripts '
+              if ! docker ps --format "{{.Names}}" | grep -qx "hotel-nginx"; then
+                echo "::warning::hotel-nginx container not found -- skipping hotel app admin user seeding."
+                exit 0
+              fi
+              HTTP_CODE=$(curl -s -o /tmp/seed_hotel_admin_resp.json -w "%{http_code}" \
+                -X POST http://localhost:8090/auth/signup \
+                -H "Content-Type: application/json" \
+                -d "{\"username\":\"admin\",\"email\":\"admin@email.com\",\"password\":\"admin@123\",\"firstName\":\"Admin\",\"lastName\":\"User\",\"dateOfBirth\":\"1990-01-01\"}")
+              if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
+                echo "Hotel reservation app admin user seeded (admin@email.com)."
+              else
+                echo "::warning::Hotel app admin user seed returned HTTP $HTTP_CODE -- likely already exists from a prior deploy, skipping."
+              fi
+              rm -f /tmp/seed_hotel_admin_resp.json
+            '
 
       - name: Deploy fault-injector platform (optional)
         id: deploy_fault_injector
