@@ -74,18 +74,16 @@ services:
       start_period: 40s
     restart: unless-stopped
 
-  # Background RQ worker that actually processes alert grouping AND triage
-  # jobs (group_triage queue) -- see core/backend/src/server/async_workers/
-  # grouper.py's own header: this is the SINGLE worker for both, by design
-  # (sequential processing to avoid LangGraph/async-checkpointer conflicts).
-  # MISSING from this file previously: without it, alerts/alert groups are
-  # created and enqueued by job-scheduler below but never dequeued, so they
-  # stay in triage_status='pending' forever -- confirmed via a real failure
-  # (3 alerts stuck pending on a fresh demo deploy, zero triage containers
-  # running at all). Note: core/backend's standalone MODE=triager worker
-  # (async_workers/triager.py) is NOT part of this flow -- its queues are
-  # unused by schedule_jobs.py/grouper.py -- so it is intentionally not
-  # added here either.
+  # Background RQ worker that processes GROUP triage jobs (group_triage
+  # queue) plus the periodic batch-grouping/ungrouped-retry jobs enqueued by
+  # job-scheduler below -- see grouper.py header comment in
+  # core/backend/src/server/async_workers/: this is the SINGLE worker for
+  # all three, by design (sequential processing to avoid LangGraph/async-
+  # checkpointer conflicts). MISSING from this file previously, along with
+  # triager below -- confirmed via a real failure: alerts stuck in
+  # triage_status pending forever on a fresh demo deploy, zero grouper/
+  # triager/job-scheduler containers running at all (only backend
+  # MODE=server and the one-shot migrate).
   grouper:
     image: ${ACR_REGISTRY}/${IMAGE_NAMESPACE:-cloudmax}/backend:${IMAGE_TAG:-verified}
     container_name: cloudmax-grouper
@@ -120,6 +118,40 @@ services:
     container_name: cloudmax-job-scheduler
     environment:
       MODE: job-scheduler
+      CONFIG_DB: "true"
+      DATABASE_URL: postgresql+asyncpg://otelu:${POSTGRES_PASSWORD}@postgres:5432/sreops
+      POSTGRES_CHECKPOINTER_CONN_STRING: postgresql://otelu:${POSTGRES_PASSWORD}@postgres:5432/checkpoint?sslmode=disable
+      REDIS_QUEUE_HOST: redis
+      REDIS_QUEUE_PORT: "6379"
+      REDIS_QUEUE_AUTH: ${REDIS_QUEUE_AUTH}
+      REDIS_QUEUE_DB: "1"
+      LANGFUSE_TRACING: "false"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - cloudmax-network
+    restart: unless-stopped
+
+  # Background RQ worker that processes individual/standalone alert triage
+  # jobs -- enqueued directly into the high_priority_triages queue by the
+  # Grafana webhook handler (apis_v1/webhooks.py), manual re-triage
+  # (apis_v1/alerts.py), and the ungrouped-alert retry job above (grouper).
+  # This is a SEPARATE worker/queue set from grouper above (see
+  # async_workers/triager.py: high/medium/low_priority_triages) -- grouper
+  # alone is not enough, confirmed via a real failure: with only grouper +
+  # job-scheduler running, a webhook-triggered alert sat in triage status
+  # QUEUED indefinitely because nothing was listening on
+  # high_priority_triages.
+  triager:
+    image: ${ACR_REGISTRY}/${IMAGE_NAMESPACE:-cloudmax}/backend:${IMAGE_TAG:-verified}
+    container_name: cloudmax-triager
+    environment:
+      MODE: triager
       CONFIG_DB: "true"
       DATABASE_URL: postgresql+asyncpg://otelu:${POSTGRES_PASSWORD}@postgres:5432/sreops
       POSTGRES_CHECKPOINTER_CONN_STRING: postgresql://otelu:${POSTGRES_PASSWORD}@postgres:5432/checkpoint?sslmode=disable
