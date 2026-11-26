@@ -171,6 +171,39 @@ services:
       - cloudmax-network
     restart: unless-stopped
 
+  # Background RQ worker that processes post-triage evaluation jobs --
+  # enqueued by both triager (individual alerts) and grouper (group
+  # triage) once a triage completes successfully, onto the
+  # triages_to_evaluate / group_evaluations queues (see
+  # async_workers/evaluator.py, entrypoint.sh's MODE=evaluator case).
+  # MISSING from this file previously, same pattern as grouper/triager/
+  # job-scheduler above -- confirmed via a real failure: evaluation
+  # records stayed in status QUEUED indefinitely after triage completed
+  # successfully, since nothing was listening on triages_to_evaluate.
+  evaluator:
+    image: ${ACR_REGISTRY}/${IMAGE_NAMESPACE:-cloudmax}/backend:${IMAGE_TAG:-verified}
+    container_name: cloudmax-evaluator
+    environment:
+      MODE: evaluator
+      CONFIG_DB: "true"
+      DATABASE_URL: postgresql+asyncpg://otelu:${POSTGRES_PASSWORD}@postgres:5432/sreops
+      POSTGRES_CHECKPOINTER_CONN_STRING: postgresql://otelu:${POSTGRES_PASSWORD}@postgres:5432/checkpoint?sslmode=disable
+      REDIS_QUEUE_HOST: redis
+      REDIS_QUEUE_PORT: "6379"
+      REDIS_QUEUE_AUTH: ${REDIS_QUEUE_AUTH}
+      REDIS_QUEUE_DB: "1"
+      LANGFUSE_TRACING: "false"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - cloudmax-network
+    restart: unless-stopped
+
   frontend:
     image: ${ACR_REGISTRY}/${IMAGE_NAMESPACE:-cloudmax}/frontend:${IMAGE_TAG:-verified}
     container_name: cloudmax-frontend
