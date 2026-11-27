@@ -561,6 +561,45 @@ jobs:
               docker exec cloudmax-backend rm -f /tmp/seed_admin_resp.json
             '
 
+      - name: Seed CloudMax sample runbooks
+        id: seed_runbooks
+        run: |
+          set -euo pipefail
+          VM_ID="${{ steps.target.outputs.vm_id }}"
+
+          # Populates the Runbooks page with sample content
+          # (infra/cloudmax/seed-runbooks/*.md, already present on the VM
+          # from this repo's own git clone in the deploy step above) so it
+          # isn't empty immediately after a demo deploy. Idempotent (skips
+          # by title) -- see seed_runbooks.py's own header comment.
+          #
+          # Best-effort only: if cloudmax-backend isn't up yet, or the seed
+          # script fails (e.g. embedding config not seeded), this step
+          # warns rather than failing the whole pipeline -- same posture as
+          # the LLM/embedding config and admin user seed steps above.
+          az vm run-command invoke \
+            --ids "$VM_ID" \
+            --command-id RunShellScript \
+            --scripts '
+              if ! docker ps --format "{{.Names}}" | grep -qx "cloudmax-backend"; then
+                echo "::warning::cloudmax-backend container not found -- skipping runbook seeding."
+                exit 0
+              fi
+
+              if [ ! -d /opt/cloudmax/infra/cloudmax/seed-runbooks ] || [ ! -f /opt/cloudmax/infra/cloudmax/scripts/seed_runbooks.py ]; then
+                echo "::warning::seed-runbooks directory or seed_runbooks.py not found on VM -- skipping runbook seeding."
+                exit 0
+              fi
+
+              docker exec cloudmax-backend mkdir -p /tmp/seed-runbooks
+              docker cp /opt/cloudmax/infra/cloudmax/seed-runbooks/. cloudmax-backend:/tmp/seed-runbooks/
+              docker cp /opt/cloudmax/infra/cloudmax/scripts/seed_runbooks.py cloudmax-backend:/tmp/seed_runbooks.py
+              docker exec -e SEED_RUNBOOKS_DIR=/tmp/seed-runbooks cloudmax-backend python3 /tmp/seed_runbooks.py \
+                && echo "CloudMax sample runbooks seeded." \
+                || echo "::warning::Failed to seed CloudMax sample runbooks -- upload manually via CloudMax'\''s Runbooks page if needed."
+              docker exec cloudmax-backend rm -rf /tmp/seed_runbooks.py /tmp/seed-runbooks
+            '
+
       - name: Deploy hotel-reservation-application (optional)
         id: deploy_hotel
         if: ${{ inputs.deploy_hotel_reservation_app }}
