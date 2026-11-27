@@ -279,7 +279,11 @@ def build_trend_metrics_query(bucket_expr, start_time: datetime, end_time: datet
         else_=TriageDbModel.processing_time_sec
     )
 
-    # Evaluation metrics (evaluations are always per-alert, even for grouped alerts)
+    # Evaluation metrics. Evaluations can be stored per-alert (alert_id set,
+    # group_id NULL) OR per-group (group_id set, alert_id NULL) -- grouped
+    # alerts get a single evaluation against the group, not one per member
+    # alert. The join below matches on EITHER foreign key, so this must not
+    # assume alert_id is always populated.
     eval_tokens = EvaluationDbModel.tokens_used
     eval_cost = EvaluationDbModel.price_usd
     eval_processing_time = EvaluationDbModel.processing_time_sec
@@ -348,7 +352,10 @@ def build_trend_metrics_query(bucket_expr, start_time: datetime, end_time: datet
         AlertGroupDBModel.id == AlertDbModel.group_id
     ).outerjoin(
         EvaluationDbModel,
-        (EvaluationDbModel.alert_id == AlertDbModel.id) & (EvaluationDbModel.status == Status.SUCCESS)
+        (
+            (EvaluationDbModel.alert_id == AlertDbModel.id) |
+            (EvaluationDbModel.group_id == AlertDbModel.group_id)
+        ) & (EvaluationDbModel.status == Status.SUCCESS)
     )
 
     # Updated where clause to support end_time
@@ -589,11 +596,20 @@ def build_trend_charts(
     avg_processing_time_per_alert_data = []
 
     for i in reversed(range(total_buckets)):
-        # Updated bucket iteration - use end_time instead of now
+        # Bucket iteration anchored on end_time ('now' for predefined
+        # ranges). i=0 must be the bucket that CONTAINS end_time itself
+        # (the current, possibly still-filling window) -- using an
+        # (i + 1) offset here would subtract one full bucket_minutes/day
+        # too many, permanently excluding the most recent bucket from the
+        # chart. This was silently hiding all data for alerts created in
+        # the last bucket_minutes/day (e.g. right after a demo fault
+        # injection), and is also what caused
+        # test_one_week_filter_current_day_alerts to see zero non-zero
+        # points for "today" at the day-level granularity.
         if bucket_minutes >= 1440:  # Day-level buckets
-            bucket_time = (end_time - timedelta(days=i + 1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            bucket_time = (end_time - timedelta(days=i)).replace(hour=0, minute=0, second=0, microsecond=0)
         else:
-            raw_time = end_time - timedelta(minutes=(i + 1) * bucket_minutes)
+            raw_time = end_time - timedelta(minutes=i * bucket_minutes)
             if bucket_minutes >= 60:
                 bucket_time = raw_time.replace(minute=0, second=0, microsecond=0)
             else:
