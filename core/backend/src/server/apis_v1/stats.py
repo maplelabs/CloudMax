@@ -508,6 +508,40 @@ def get_bucket_config(time_delta: timedelta) -> tuple[int, int, str]:
     return bucket_minutes, total_buckets, trunc_unit
 
 
+def floor_to_bucket(dt: datetime, bucket_minutes: int) -> datetime:
+    """
+    Floor a timezone-aware datetime to an absolute, epoch-aligned boundary of
+    bucket_minutes. This must produce results identical to the SQL-side bucket
+    expression (see get_minute_bucket_expr) so that Python-reconstructed bucket
+    timestamps exactly match the keys returned by the database aggregation.
+
+    Flooring to raw epoch seconds (rather than relative to 'now'/end_time) makes
+    the bucketing deterministic and independent of when the request happens to
+    be made.
+    """
+    interval_seconds = bucket_minutes * 60
+    floored_epoch = (int(dt.timestamp()) // interval_seconds) * interval_seconds
+    return datetime.fromtimestamp(floored_epoch, tz=timezone.utc)
+
+
+def get_minute_bucket_expr(column, bucket_minutes: int):
+    """
+    Build a SQL expression that floors `column` to an absolute, epoch-aligned
+    boundary of bucket_minutes (e.g. 5 or 30 minutes).
+
+    This intentionally mirrors floor_to_bucket() so that bucket keys computed in
+    SQL (used for aggregation/grouping) line up exactly with bucket keys
+    reconstructed in Python (used for chart rendering). Using plain
+    date_trunc('minute', ...) here would only truncate to whole minutes, not to
+    bucket_minutes-sized windows, causing the two sides to disagree and every
+    chart lookup to miss.
+    """
+    interval_seconds = bucket_minutes * 60
+    return func.to_timestamp(
+        func.floor(func.extract('epoch', column) / interval_seconds) * interval_seconds
+    )
+
+
 def build_trend_charts(
         time_series_result,
         time_range: Timeline,
@@ -559,9 +593,17 @@ def build_trend_charts(
         if bucket_minutes >= 1440:  # Day-level buckets
             bucket_time = (end_time - timedelta(days=i + 1)).replace(hour=0, minute=0, second=0, microsecond=0)
         else:
-            bucket_time = (end_time - timedelta(minutes=(i + 1) * bucket_minutes)).replace(second=0, microsecond=0)
+            raw_time = end_time - timedelta(minutes=(i + 1) * bucket_minutes)
             if bucket_minutes >= 60:
-                bucket_time = bucket_time.replace(minute=0)
+                bucket_time = raw_time.replace(minute=0, second=0, microsecond=0)
+            else:
+                # Minute-level buckets (5 or 30 min): floor to an absolute,
+                # epoch-aligned boundary so this key matches the SQL-side
+                # bucket_expr exactly (see get_minute_bucket_expr). A naive
+                # second/microsecond-only truncation does not align to
+                # bucket_minutes-sized windows and causes every lookup below
+                # to miss, silently defaulting every chart point to 0.
+                bucket_time = floor_to_bucket(raw_time, bucket_minutes)
 
         audit_score_per_alert_value = audit_scores_per_alert_by_time.get(bucket_time, 0)
         audit_score_per_alert_data.append(TimeSeriesDataPoint(
@@ -702,20 +744,18 @@ async def get_overview_stats(
 
     chaos_enabled = await is_chaos_system_enabled()
 
-    # Get bucket configuration for custom ranges
-    if request.time_range == Timeline.CUSTOM:
-        _, _, trunc_unit = get_bucket_config(time_delta)  # Only trunc_unit needed here
-        bucket_expr = func.date_trunc(trunc_unit, AlertDbModel.created_at)
+    # Get bucket configuration (shared by both custom and predefined ranges so
+    # the SQL-side bucket_expr and the Python-side reconstruction in
+    # build_trend_charts always agree on bucket_minutes/trunc_unit).
+    bucket_minutes, _, trunc_unit = get_bucket_config(time_delta)
+    if trunc_unit == 'minute':
+        # date_trunc('minute', ...) only floors to whole minutes, not to
+        # bucket_minutes-sized windows (5 or 30 min). Use an epoch-aligned
+        # floor instead so these keys match floor_to_bucket() in
+        # build_trend_charts exactly.
+        bucket_expr = get_minute_bucket_expr(AlertDbModel.created_at, bucket_minutes)
     else:
-        # Existing logic for predefined ranges
-        if request.time_range in [Timeline.THIRTY_MINS, Timeline.ONE_HOUR]:
-            bucket_expr = func.date_trunc('minute', AlertDbModel.created_at)
-        elif request.time_range == Timeline.SIX_HOURS:
-            bucket_expr = func.date_trunc('minute', AlertDbModel.created_at)
-        elif request.time_range == Timeline.TWENTY_FOUR_HOURS:
-            bucket_expr = func.date_trunc('hour', AlertDbModel.created_at)
-        else:
-            bucket_expr = func.date_trunc('day', AlertDbModel.created_at)
+        bucket_expr = func.date_trunc(trunc_unit, AlertDbModel.created_at)
 
     # Update query calls to pass end_time for custom ranges
     current_counts_query = build_kpi_counts_query(start_time, end_time if request.time_range == Timeline.CUSTOM else None)
