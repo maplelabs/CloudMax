@@ -236,26 +236,61 @@ async def test_c15_refresh_valid(mock_cr, mock_ca, mock_decode, mock_verify_toke
                                    expires_at=datetime.now(timezone.utc) + timedelta(days=1))]
     )
     mock_db_session.get = AsyncMock(return_value=make_user())
-    r = await client.post(f"{REFRESH_URL}?refresh_token=t")
+    r = await client.post(REFRESH_URL, json={"refresh_token": "t"})
     assert r.status_code == 200
 
 
 @patch("src.server.apis_v1.auth.decode_token", return_value=None)
 async def test_c16_refresh_invalid(mock_decode, client):
-    r = await client.post(f"{REFRESH_URL}?refresh_token=invalid")
+    r = await client.post(REFRESH_URL, json={"refresh_token": "invalid"})
     assert r.status_code == 401
 
 
 @patch("src.server.apis_v1.auth.decode_token", return_value={"sub": "1", "type": "access"})
 async def test_c17_refresh_using_access_token(mock_decode, client):
-    r = await client.post(f"{REFRESH_URL}?refresh_token=accesstoken")
+    r = await client.post(REFRESH_URL, json={"refresh_token": "accesstoken"})
     assert r.status_code == 401
 
 
 @patch("src.server.apis_v1.auth.decode_token", return_value={"email": "u"})
 async def test_c18_refresh_missing_claims(mock_decode, client):
-    r = await client.post(f"{REFRESH_URL}?refresh_token=x")
+    r = await client.post(REFRESH_URL, json={"refresh_token": "x"})
     assert r.status_code == 401
+
+
+@patch("src.server.apis_v1.auth.verify_token", return_value=True)
+@patch("src.server.apis_v1.auth.decode_token")
+@patch("src.server.utilities.auth_utils.create_access_token", return_value="new_access")
+@patch("src.server.utilities.auth_utils.create_refresh_token", return_value=("new_refresh", datetime.now(timezone.utc)))
+async def test_refresh_accepts_token_in_request_body(mock_cr, mock_ca, mock_decode, mock_verify_token, client, mock_db_session):
+    mock_decode.return_value = {"sub": "1", "email": "u", "type": "refresh"}
+    mock_db_session.execute = mock_db_session.make_scalar_result(
+        first=None,
+        all_list=[UserRefreshToken(id=1, user_id=1, token_hash="fake_hash",
+                                   expires_at=datetime.now(timezone.utc) + timedelta(days=1))]
+    )
+    mock_db_session.get = AsyncMock(return_value=make_user())
+    r = await client.post(REFRESH_URL, json={"refresh_token": "t"})
+    assert r.status_code == 200
+    assert "access_token" in r.json()
+
+
+@patch("src.server.apis_v1.auth.verify_password", return_value=True)
+@patch("src.server.apis_v1.auth.create_access_token", return_value="access123")
+@patch("src.server.apis_v1.auth.create_refresh_token", return_value=("refresh123", datetime.now(timezone.utc)))
+async def test_login_is_rate_limited_after_repeated_failures(mock_refresh, mock_access, mock_verify, client, mock_db_session):
+    # first a few attempts should still be allowed, then the 6th should be rejected
+    from src.server.apis_v1 import auth as auth_module
+    auth_module._login_attempts.clear()
+
+    mock_db_session.execute = mock_db_session.make_scalar_result(first=make_user())
+    for _ in range(5):
+        response = await client.post(LOGIN_URL, json={"email": "user@test.com", "password": "x"})
+        assert response.status_code == 200
+
+    response = await client.post(LOGIN_URL, json={"email": "user@test.com", "password": "x"})
+    assert response.status_code == 429
+    assert "Too many login attempts" in response.text
 
 
 # LOGOUT TESTS (C19–C20)

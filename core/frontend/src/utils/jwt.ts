@@ -2,12 +2,12 @@ import { jwtDecode } from "jwt-decode";
 
 export interface DecodedToken {
   sub: string; // user_id
-  email: string;
-  username: string;
   admin: boolean;
   exp: number;
   iat: number;
   type: string;
+  username?: string;
+  email?: string;
 }
 
 export function decodeJWT(token: string): DecodedToken | null {
@@ -20,7 +20,7 @@ export function decodeJWT(token: string): DecodedToken | null {
 }
 
 export function getUserIdFromToken(): string | null {
-  const token = localStorage.getItem("access_token");
+  const token = sessionStorage.getItem("access_token");
   if (!token) {
     return null;
   }
@@ -30,7 +30,7 @@ export function getUserIdFromToken(): string | null {
 }
 
 export function getUserInfoFromToken(): DecodedToken | null {
-  const token = localStorage.getItem("access_token");
+  const token = sessionStorage.getItem("access_token");
   if (!token) {
     return null;
   }

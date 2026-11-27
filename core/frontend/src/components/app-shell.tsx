@@ -126,7 +126,7 @@ export function AppShell({ children }: AppShellProps) {
                 size="icon"
                 className="h-9 w-9 rounded-full bg-gradient-green text-white hover:opacity-90 transition-opacity"
               >
-                <span className="text-sm font-semibold">{currentUserInfo?.username?.slice(0,2)?.toUpperCase()}</span>
+                <span className="text-sm font-semibold">{currentUserInfo?.username?.slice(0,2)?.toUpperCase() || currentUserInfo?.sub?.slice(-2).toUpperCase() || 'U'}</span>
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent className="w-56" align="end" forceMount>

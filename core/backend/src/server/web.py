@@ -8,8 +8,10 @@ from contextlib import asynccontextmanager
 
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from src.server.apis_v1.alerts import router as v1_alerts_router
 from src.server.apis_v1.alert_groups import router as v1_alert_groups_router
@@ -31,6 +33,33 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_error_detail(detail):
+    """Return a safe client-facing error message and avoid leaking internal details."""
+    if isinstance(detail, dict):
+        return "Request failed"
+    if isinstance(detail, list):
+        return "Request failed"
+    if isinstance(detail, str):
+        normalized = detail.lower()
+        allowlist = [
+            "invalid credentials",
+            "too many login attempts",
+            "not found",
+            "unauthorized",
+            "forbidden",
+            "invalid request",
+            "token expired",
+            "token revoked",
+            "request failed",
+            "bad request",
+            "rate limit",
+        ]
+        if any(item in normalized for item in allowlist):
+            return detail
+        return "Request failed"
+    return "Request failed"
 
 
 @asynccontextmanager
@@ -109,14 +138,41 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
+cors_allowed_origins = os.getenv(
+    "CORS_ALLOWED_ORIGINS",
+    "https://cloudmax.xoriant.com,https://localhost,https://localhost:3101,http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173",
+).split(",")
+
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
+    allow_origins=[origin.strip() for origin in cors_allowed_origins if origin.strip()],
+    allow_origin_regex=r"https://.*\\.xoriant\\.com",
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(request: Request, exc: RequestValidationError):
+    logger.warning(f"[REQUEST-VALIDATION] Invalid request payload | path={request.url.path} | detail={exc.errors()}")
+    return JSONResponse(status_code=422, content={"detail": "Invalid request payload"})
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    safe_detail = _sanitize_error_detail(exc.detail)
+    if exc.status_code >= 500:
+        logger.exception(f"[HTTP-ERROR] Server error | path={request.url.path}")
+        return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+    return JSONResponse(status_code=exc.status_code, content={"detail": safe_detail})
+
+
+@app.exception_handler(Exception)
+async def internal_exception_handler(request: Request, exc: Exception):
+    logger.exception(f"[UNHANDLED-ERROR] Unexpected server error | path={request.url.path}")
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 
 @app.get("/")

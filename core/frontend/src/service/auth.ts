@@ -40,29 +40,29 @@ export interface UserProfile {
 // Token management
 export const tokenManager = {
   getAccessToken: (): string | null => {
-    return localStorage.getItem('access_token');
+    return sessionStorage.getItem('access_token');
   },
 
   getRefreshToken: (): string | null => {
-    return localStorage.getItem('refresh_token');
+    return sessionStorage.getItem('refresh_token');
   },
 
   setTokens: (accessToken: string, refreshToken: string, userId?: string): void => {
-    localStorage.setItem('access_token', accessToken);
-    localStorage.setItem('refresh_token', refreshToken);
-    localStorage.setItem('isAuthenticated', 'true');
+    sessionStorage.setItem('access_token', accessToken);
+    sessionStorage.setItem('refresh_token', refreshToken);
+    sessionStorage.setItem('isAuthenticated', 'true');
     if (userId) {
-      localStorage.setItem('user_id', userId);
+      sessionStorage.setItem('user_id', userId);
     }
   },
 
   clearTokens: (): void => {
-    localStorage.removeItem('access_token');
-    localStorage.removeItem('refresh_token');
-    localStorage.removeItem('isAuthenticated');
-    localStorage.removeItem('user_id');
+    sessionStorage.removeItem('access_token');
+    sessionStorage.removeItem('refresh_token');
+    sessionStorage.removeItem('isAuthenticated');
+    sessionStorage.removeItem('user_id');
     // Also clear old auth credentials if they exist
-    localStorage.removeItem('auth_credentials');
+    sessionStorage.removeItem('auth_credentials');
   },
 
   isAuthenticated: (): boolean => {
@@ -150,7 +150,8 @@ export const authService = {
 
     try {
       const response = await axios.post<TokenResponse>(
-        `${API_BASE_URL}/auth/users/refresh?refresh_token=${refreshToken}`,
+        `${API_BASE_URL}/auth/users/refresh`,
+        { refresh_token: refreshToken },
         {
           headers: {
             'Content-Type': 'application/json',
