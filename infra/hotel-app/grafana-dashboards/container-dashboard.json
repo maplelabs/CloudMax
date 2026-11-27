@@ -65,27 +65,7 @@
           "unit": "percent"
         }
       },
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
-    },
-    {
-      "id": 4,
-      "title": "Container CPU Limits",
-      "type": "timeseries",
-      "datasource": "prometheus",
-      "targets": [
-        {
-          "expr": "container_spec_cpu_quota{container_label_com_docker_compose_service=~\"kafka|postgres|elasticsearch|frontend|nodejs-bff|search-service|booking-service|booking-post-processing-service|invoice-service\"} / container_spec_cpu_period{container_label_com_docker_compose_service=~\"kafka|postgres|elasticsearch|frontend|nodejs-bff|search-service|booking-service|booking-post-processing-service|invoice-service\"}",
-          "legendFormat": "{{container_label_com_docker_compose_service}}_cpu_limit",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 2
-        }
-      },
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 8}
     },
     {
       "id": 5,
