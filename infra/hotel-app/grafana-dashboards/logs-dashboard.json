@@ -17,7 +17,7 @@
       "datasource": "Loki",
       "targets": [
         {
-          "expr": "{service=\"$service\"} | json",
+          "expr": "{service=~\"$service\"} | json",
           "refId": "A"
         }
       ],
@@ -47,7 +47,7 @@
       "datasource": "Loki",
       "targets": [
         {
-          "expr": "sum by (level) (count_over_time({service=\"$service\"} | json | level != \"\" [5m]))",
+          "expr": "sum by (level) (count_over_time({service=~\"$service\"} | json | level != \"\" [5m]))",
           "legendFormat": "{{level}}",
           "refId": "A"
         }
@@ -67,7 +67,7 @@
       "datasource": "Loki",
       "targets": [
         {
-          "expr": "sum(count_over_time({service=\"$service\"} | json | level=\"ERROR\" [5m]))",
+          "expr": "sum(count_over_time({service=~\"$service\"} | json | level=\"ERROR\" [5m]))",
           "legendFormat": "Errors",
           "refId": "A"
         }
@@ -94,7 +94,7 @@
       "datasource": "Loki",
       "targets": [
         {
-          "expr": "count(count by (trace_id) (count_over_time({service=\"$service\"} | json | trace_id != \"\" [5m])))",
+          "expr": "count(count by (trace_id) (count_over_time({service=~\"$service\"} | json | trace_id != \"\" [5m])))",
           "legendFormat": "Traces",
           "refId": "A"
         }
@@ -127,7 +127,7 @@
         },
         "options": [],
         "includeAll": true,
-        "allValue": ".*",
+        "allValue": ".+",
         "multi": false,
         "skipUrlSync": false,
         "label": "Service",
